@@ -1,0 +1,129 @@
+/* ═══════════════════════════════════════════
+   MLMonitor — Global Styles
+   ═══════════════════════════════════════════ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg:           #0a0e17;
+  --bg-card:      #111827;
+  --bg-card-h:    #1a2236;
+  --bg-surface:   #0f1525;
+  --bg-input:     #1a2236;
+  --border:       #1e293b;
+  --border-lt:    #293548;
+  --text:         #e2e8f0;
+  --text-muted:   #94a3b8;
+  --text-dim:     #64748b;
+  --accent:       #06b6d4;
+  --green:        #10b981;
+  --yellow:       #f59e0b;
+  --red:          #ef4444;
+  --purple:       #a78bfa;
+  --blue:         #3b82f6;
+  --pink:         #ec4899;
+  --font-body:    'DM Sans', 'Manrope', system-ui, -apple-system, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-lt);
+}
+
+/* ── Selection ── */
+::selection {
+  background: rgba(6, 182, 212, 0.3);
+  color: #fff;
+}
+
+/* ── Focus ── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Input reset ── */
+input, select, button, textarea {
+  font-family: inherit;
+}
+
+input::placeholder {
+  color: var(--text-dim);
+}
+
+/* ── Transitions ── */
+a, button {
+  transition: all 0.15s ease;
+}
+
+/* ── Table hover rows ── */
+tr {
+  transition: background 0.12s ease;
+}
+
+/* ── Animations ── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
+.animate-in {
+  animation: fadeIn 0.3s ease both;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.35s ease both;
+}
+
+/* ── Stagger delays ── */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.10s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.20s; }
