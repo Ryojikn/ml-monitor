@@ -2,7 +2,7 @@
    Model Detail — tabbed deep-dive
    ═══════════════════════════════════════════ */
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   AreaChart, Area, BarChart, Bar, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -15,7 +15,7 @@ import {
 } from './ui.jsx'
 import { theme, statusColor, driftColor } from '../utils/theme.js'
 import { fmt, fmtPct } from '../utils/helpers.js'
-import { generateHistogramData } from '../data/generators.js'
+import { api } from '../api.js'
 import { ENGINES } from '../utils/constants.js'
 
 /* ── sub-tabs ── */
@@ -28,14 +28,59 @@ const TABS = [
   { key: 'config',      label: 'Configuration',   icon: 'settings' },
 ]
 
-export default function ModelDetail({ model: m, onBack }) {
+export default function ModelDetail({ model: m, onBack, onRefresh }) {
   const [tab, setTab]                   = useState('drift')
   const [selectedFeature, setFeature]   = useState(null)
+  const [histData, setHistData]         = useState(null)
+  const [runPending, setRunPending]     = useState(false)
 
-  const histData = useMemo(
-    () => (selectedFeature ? generateHistogramData(selectedFeature) : null),
-    [selectedFeature],
-  )
+  // Convert stored histogram { bins, counts } into [{ bin, baseline, current }] for Recharts
+  function toChartHistogram(baseline_histogram, current_histogram) {
+    const bins = baseline_histogram?.bins ?? []
+    const bCounts = baseline_histogram?.counts ?? []
+    const cCounts = current_histogram?.counts ?? []
+    return bins.map((bin, i) => ({
+      bin: typeof bin === 'string' ? bin.slice(0, 8) : String(bin).slice(0, 6),
+      baseline: bCounts[i] ?? 0,
+      current:  cCounts[i] ?? 0,
+    }))
+  }
+
+  useEffect(() => {
+    if (!selectedFeature) { setHistData(null); return }
+    // First try to use stored histogram from featureDrift data
+    if (selectedFeature.baseline_histogram && selectedFeature.current_histogram) {
+      setHistData(toChartHistogram(selectedFeature.baseline_histogram, selectedFeature.current_histogram))
+      return
+    }
+    // Fall back to API call
+    api.getHistogram(m.id, selectedFeature.feature)
+      .then((r) => setHistData(toChartHistogram(r.baseline_histogram, r.current_histogram)))
+      .catch(() => setHistData(null))
+  }, [m.id, selectedFeature])
+
+  const handleTriggerRun = async () => {
+    setRunPending(true)
+    try {
+      await api.triggerRun(m.id)
+      // Poll until run completes
+      const poll = setInterval(async () => {
+        const runs = await api.listRuns(m.id).catch(() => null)
+        if (runs && runs.length > 0) {
+          const latest = runs[0]
+          if (latest.status !== 'running') {
+            clearInterval(poll)
+            setRunPending(false)
+            if (onRefresh) onRefresh(m.id)
+          }
+        }
+      }, 2500)
+      // Safety timeout after 60s
+      setTimeout(() => { clearInterval(poll); setRunPending(false) }, 60000)
+    } catch {
+      setRunPending(false)
+    }
+  }
 
   return (
     <div>
@@ -55,7 +100,9 @@ export default function ModelDetail({ model: m, onBack }) {
             {m.owner} · {m.team} · Engine: {m.engine} · Schedule: {m.schedule} · Lookback: {m.lookback_window}
           </div>
         </div>
-        <Button icon="play" size="sm">Trigger Run</Button>
+        <Button icon="play" size="sm" onClick={handleTriggerRun} disabled={runPending}>
+          {runPending ? 'Running…' : 'Trigger Run'}
+        </Button>
         <Button icon="settings" size="sm" variant="ghost" />
       </div>
 
@@ -210,9 +257,9 @@ export default function ModelDetail({ model: m, onBack }) {
             .slice()
             .sort((a, b) => b.psi - a.psi)
             .map((fd) => {
-              const hist = generateHistogramData(fd)
+              const hist = toChartHistogram(fd.baseline_histogram, fd.current_histogram)
               return (
-                <Card key={fd.feature}>
+                <Card key={fd.feature} style={{ cursor: 'pointer' }} onClick={() => setFeature(fd)}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                     <span style={{ fontWeight: 600, color: theme.text, fontSize: 13 }}>{fd.feature}</span>
                     <Badge color={driftColor(fd.psi)}>{fd.severity}</Badge>

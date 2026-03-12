@@ -2,13 +2,14 @@
    App — Root component
    ═══════════════════════════════════════════ */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Icon from './components/Icon.jsx'
 import ModelOverview from './components/ModelOverview.jsx'
 import ModelDetail from './components/ModelDetail.jsx'
 import AlertsView from './components/AlertsView.jsx'
+import SettingsView from './components/SettingsView.jsx'
 import OnboardingWizard from './components/OnboardingWizard.jsx'
-import { MODELS, ALL_ALERTS } from './data/generators.js'
+import { api } from './api.js'
 import { theme } from './utils/theme.js'
 
 export default function App() {
@@ -16,13 +17,39 @@ export default function App() {
   const [selectedModel, setModel]   = useState(null)
   const [showWizard, setShowWizard] = useState(false)
   const [now, setNow]               = useState(new Date())
+  const [models, setModels]         = useState([])
+  const [alerts, setAlerts]         = useState([])
+  const [loading, setLoading]       = useState(true)
 
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 60_000)
-    return () => clearInterval(id)
+  const fetchData = useCallback(() => {
+    setLoading(true)
+    Promise.all([
+      api.listModels().catch(() => ({ items: [] })),
+      api.listAlerts().catch(() => ({ items: [] })),
+    ]).then(([modelsRes, alertsRes]) => {
+      setModels(modelsRes.items ?? [])
+      setAlerts(alertsRes.items ?? [])
+    }).finally(() => setLoading(false))
   }, [])
 
-  const openAlerts = ALL_ALERTS.filter((a) => a.status === 'open').length
+  useEffect(() => {
+    fetchData()
+    const id = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(id)
+  }, [fetchData])
+
+  // When a model is selected, fetch full detail
+  const handleSelectModel = useCallback(async (m) => {
+    try {
+      const detail = await api.getModel(m.id)
+      setModel(detail)
+    } catch {
+      setModel(m)
+    }
+    setView('detail')
+  }, [])
+
+  const openAlerts = alerts.filter((a) => a.status === 'open').length
 
   return (
     <div style={{ minHeight: '100vh', background: theme.bg, color: theme.text, fontFamily: "var(--font-body, 'DM Sans', system-ui, sans-serif)" }}>
@@ -69,8 +96,9 @@ export default function App() {
         {/* Nav */}
         <nav style={{ display: 'flex', gap: 2, marginLeft: 20 }}>
           {[
-            { key: 'overview', label: 'Models', icon: 'grid' },
-            { key: 'alerts',   label: 'Alerts', icon: 'bell' },
+            { key: 'overview',  label: 'Models',   icon: 'grid' },
+            { key: 'alerts',    label: 'Alerts',   icon: 'bell' },
+            { key: 'settings',  label: 'Settings', icon: 'settings' },
           ].map((n) => (
             <button
               key={n.key}
@@ -119,8 +147,9 @@ export default function App() {
       <main style={{ maxWidth: 1280, margin: '0 auto', padding: '24px 24px 60px' }}>
         {view === 'overview' && (
           <ModelOverview
-            models={MODELS}
-            onSelect={(m) => { setModel(m); setView('detail') }}
+            models={models}
+            loading={loading}
+            onSelect={handleSelectModel}
             onNewModel={() => setShowWizard(true)}
           />
         )}
@@ -129,16 +158,32 @@ export default function App() {
           <ModelDetail
             model={selectedModel}
             onBack={() => { setModel(null); setView('overview') }}
+            onRefresh={async (id) => {
+              const detail = await api.getModel(id)
+              setModel(detail)
+              fetchData()
+            }}
           />
         )}
 
         {view === 'alerts' && (
-          <AlertsView alerts={ALL_ALERTS} models={MODELS} />
+          <AlertsView alerts={alerts} models={models} onRefresh={fetchData} />
+        )}
+
+        {view === 'settings' && (
+          <SettingsView />
         )}
       </main>
 
       {/* ═══════════ Wizard overlay ═══════════ */}
-      {showWizard && <OnboardingWizard onClose={() => setShowWizard(false)} />}
+      {showWizard && (
+        <OnboardingWizard
+          onClose={(opts) => {
+            setShowWizard(false)
+            if (opts?.refresh) fetchData()
+          }}
+        />
+      )}
     </div>
   )
 }
