@@ -82,6 +82,7 @@ SCHEMA = pa.schema([
     pa.field("loan_purpose",      pa.string()),
     pa.field("home_ownership",    pa.string()),
     pa.field("prediction",        pa.int8()),
+    pa.field("prediction_score",  pa.float32()),
     pa.field("target",            pa.int8()),
 ])
 
@@ -156,6 +157,20 @@ def _make_batch(
     noise_flip = rng.random(n) < (0.08 + 0.10 * drift)
     target     = np.where(noise_flip, 1 - prediction, prediction).astype(np.int8)
 
+    # prediction_score: float probability ∈ [0, 1], correlated with hard prediction.
+    # As drift increases, model calibration degrades → scores compress toward 0.5.
+    # Positive class: Beta(alpha_pos, beta_pos) with mean > 0.5
+    # Negative class: Beta(alpha_neg, beta_neg) with mean < 0.5
+    alpha_pos = max(0.5, 4.0 - 2.0 * drift)
+    beta_pos  = max(0.5, 2.0 + 1.0 * drift)
+    alpha_neg = max(0.5, 2.0 + 1.0 * drift)
+    beta_neg  = max(0.5, 4.0 - 2.0 * drift)
+    prediction_score = np.where(
+        prediction == 1,
+        rng.beta(alpha_pos, beta_pos, n),
+        rng.beta(alpha_neg, beta_neg, n),
+    ).astype(np.float32)
+
     return pa.record_batch(
         {
             "dat_ref":           np.full(n, dat_ref),
@@ -169,6 +184,7 @@ def _make_batch(
             "loan_purpose":      loan_purpose,
             "home_ownership":    home_ownership,
             "prediction":        prediction,
+            "prediction_score":  prediction_score,
             "target":            target,
         },
         schema=SCHEMA,
@@ -265,9 +281,10 @@ def main() -> None:
     print('  features       : ["age","income","credit_score","loan_amount",')
     print('                    "interest_rate","debt_to_income",')
     print('                    "employment_status","loan_purpose","home_ownership"]')
-    print('  prediction_col : "prediction"')
-    print('  target_col     : "target"')
-    print('  timestamp_col  : "dat_ref"')
+    print('  prediction_col       : "prediction"')
+    print('  prediction_score_col : "prediction_score"')
+    print('  target_col           : "target"')
+    print('  timestamp_col        : "dat_ref"')
 
 
 if __name__ == "__main__":

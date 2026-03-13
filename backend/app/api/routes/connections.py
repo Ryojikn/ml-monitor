@@ -80,3 +80,18 @@ async def browse_conn(conn_id: str, path: str = "", db: AsyncSession = Depends(g
         return await browse_connection(conn.type, conn.config, path)
     except Exception as exc:
         raise HTTPException(400, str(exc))
+
+
+@router.get("/{conn_id}/columns")
+async def get_connection_columns(conn_id: str, path: str = "", db: AsyncSession = Depends(get_db)):
+    """Return column names from a file or table at the given path."""
+    conn = await db.get(StorageConnection, conn_id)
+    if not conn:
+        raise HTTPException(404, "Connection not found")
+    try:
+        from app.engine.loaders import load_dataframe
+        source_config = {"source_type": conn.type, "path": path, "format": "parquet" if path.endswith(".parquet") else "csv"}
+        df = await load_dataframe(source_config, conn.config or {})
+        return {"columns": list(df.columns), "path": path}
+    except Exception as exc:
+        raise HTTPException(400, str(exc))

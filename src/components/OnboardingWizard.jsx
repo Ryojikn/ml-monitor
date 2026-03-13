@@ -195,9 +195,10 @@ function StorageBrowser({ connId, onSelect, onClose }) {
 
 /* ── DataSourceStep — shared for step 2 & 3 ── */
 
-function DataSourceStep({ sourceKey, pathKey, form, u, file, setFile, connections, label }) {
+function DataSourceStep({ sourceKey, pathKey, connIdKey, form, u, file, setFile, connections, label }) {
   const [showBrowser, setShowBrowser] = useState(false)
-  const [connId, setConnId] = useState('')
+  const connId = form[connIdKey] || ''
+  const setConnId = (v) => u(connIdKey, v)
   const source = form[sourceKey]
 
   // Build connection options that match the selected source type
@@ -298,6 +299,257 @@ function DataSourceStep({ sourceKey, pathKey, form, u, file, setFile, connection
   )
 }
 
+/* ── CSV header parser ── */
+
+function parseCSVHeader(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const firstLine = (e.target.result || '').split('\n')[0]
+      resolve(firstLine.split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean))
+    }
+    reader.readAsText(file.slice(0, 4096))
+  })
+}
+
+/* ── cron builder helpers ── */
+
+function buildCron(freq, everyN, time, day) {
+  const [hh, mm] = (time || '06:00').split(':').map(Number)
+  if (freq === 'every_hour') return '0 * * * *'
+  if (freq === 'every_n_hours') return `0 */${everyN || 2} * * *`
+  if (freq === 'daily') return `${mm} ${hh} * * *`
+  if (freq === 'weekly') return `${mm} ${hh} * * ${day ?? 1}`
+  return null  // custom — caller uses raw cron
+}
+
+function cronLabel(freq, everyN, time, day) {
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  if (freq === 'every_hour') return 'every hour'
+  if (freq === 'every_n_hours') return `every ${everyN || 2} hours`
+  if (freq === 'daily') return `daily at ${time || '06:00'} UTC`
+  if (freq === 'weekly') return `every ${DAYS[day ?? 1]} at ${time || '06:00'} UTC`
+  if (freq === 'custom') return 'custom schedule'
+  return ''
+}
+
+/* ── ScheduleBuilder ── */
+
+function ScheduleBuilder({ form, u }) {
+  const freq = form.scheduleFreq
+  const time = form.scheduleTime
+  const everyN = form.scheduleEveryN
+  const day = form.scheduleDay
+
+  // Keep form.cron in sync whenever builder fields change
+  const set = (key, val) => {
+    const next = { ...form, [key]: val }
+    const newCron = buildCron(next.scheduleFreq, next.scheduleEveryN, next.scheduleTime, next.scheduleDay)
+    u(key, val)
+    if (newCron !== null) u('cron', newCron)
+  }
+
+  const TIMES = Array.from({ length: 48 }, (_, i) => {
+    const h = String(Math.floor(i / 2)).padStart(2, '0')
+    const m = i % 2 === 0 ? '00' : '30'
+    return { value: `${h}:${m}`, label: `${h}:${m}` }
+  })
+
+  const DAYS_OF_WEEK = [
+    { value: '0', label: 'Sunday' }, { value: '1', label: 'Monday' },
+    { value: '2', label: 'Tuesday' }, { value: '3', label: 'Wednesday' },
+    { value: '4', label: 'Thursday' }, { value: '5', label: 'Friday' },
+    { value: '6', label: 'Saturday' },
+  ]
+
+  const N_OPTIONS = ['2','3','4','6','8','12'].map((v) => ({ value: v, label: v }))
+
+  const cron = freq === 'custom' ? form.cron : (buildCron(freq, everyN, time, day) ?? form.cron)
+  const label = cronLabel(freq, everyN, time, day)
+
+  return (
+    <div>
+      <Field label="Frequency">
+        <Select
+          value={freq}
+          onChange={(v) => set('scheduleFreq', v)}
+          style={{ width: '100%' }}
+          options={[
+            { value: 'every_hour',    label: 'Every Hour' },
+            { value: 'every_n_hours', label: 'Every N Hours' },
+            { value: 'daily',         label: 'Daily' },
+            { value: 'weekly',        label: 'Weekly' },
+            { value: 'custom',        label: 'Custom Cron' },
+          ]}
+        />
+      </Field>
+
+      {freq === 'every_n_hours' && (
+        <Field label="Every how many hours?">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 13, color: theme.textDim }}>Every</span>
+            <div style={{ width: 100 }}>
+              <Select value={String(everyN)} onChange={(v) => set('scheduleEveryN', v)} style={{ width: '100%' }} options={N_OPTIONS} />
+            </div>
+            <span style={{ fontSize: 13, color: theme.textDim }}>hours</span>
+          </div>
+        </Field>
+      )}
+
+      {(freq === 'daily' || freq === 'weekly') && (
+        <div style={{ display: 'flex', gap: 12 }}>
+          {freq === 'weekly' && (
+            <Field label="Day of week">
+              <Select value={String(day)} onChange={(v) => set('scheduleDay', v)} style={{ width: '100%' }} options={DAYS_OF_WEEK} />
+            </Field>
+          )}
+          <Field label="At (UTC)">
+            <Select value={time} onChange={(v) => set('scheduleTime', v)} style={{ width: 120 }} options={TIMES} />
+          </Field>
+        </div>
+      )}
+
+      {freq === 'custom' && (
+        <Field label="Cron Expression">
+          <Input value={form.cron} onChange={(v) => u('cron', v)} placeholder="0 6 * * *" mono />
+        </Field>
+      )}
+
+      {/* Preview */}
+      <div style={{ marginTop: 8, padding: '8px 12px', background: theme.bgSurface, borderRadius: 8, fontSize: 12, color: theme.textDim, fontFamily: 'var(--font-mono)' }}>
+        ↳ <span style={{ color: theme.accent }}>{cron}</span>
+        {label && <span style={{ marginLeft: 8, fontFamily: 'inherit', color: theme.textDim }}>— {label}</span>}
+      </div>
+    </div>
+  )
+}
+
+/* ── ColumnMappingStep ── */
+
+function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingColumns }) {
+  const cols = discoveredColumns
+  const hasCols = cols.length > 0
+
+  const noneOption = { value: '', label: 'None' }
+  const colOptions = [noneOption, ...cols.map((c) => ({ value: c, label: c }))]
+
+  const selectedFeatures = form.selectedFeatures ?? []
+  const toggleFeature = (col) => {
+    const next = selectedFeatures.includes(col)
+      ? selectedFeatures.filter((c) => c !== col)
+      : [...selectedFeatures, col]
+    u('selectedFeatures', next)
+  }
+  const allSelected = cols.length > 0 && selectedFeatures.length === cols.length
+  const toggleAll = () => u('selectedFeatures', allSelected ? [] : [...cols])
+
+  const canLoad = !!(form.refConnId && form.refPath)
+
+  if (!hasCols) {
+    return (
+      <>
+        {/* Load columns button for connection-based sources */}
+        {(form.refSource !== 'upload' || form.prodSource !== 'upload') && (
+          <div style={{ marginBottom: 16, padding: '12px 16px', background: theme.bgSurface, borderRadius: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Icon name="hash" size={14} style={{ color: theme.accent }} />
+            <span style={{ fontSize: 13, color: theme.textDim, flex: 1 }}>
+              Load column schema from your configured data source to enable column selection.
+            </span>
+            <button
+              onClick={onLoadColumns}
+              disabled={!canLoad || loadingColumns}
+              style={{
+                padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                background: canLoad ? theme.accent : theme.bgInput,
+                color: canLoad ? '#000' : theme.textDim,
+                border: 'none', cursor: canLoad ? 'pointer' : 'default',
+                opacity: loadingColumns ? 0.6 : 1,
+              }}
+            >
+              {loadingColumns ? 'Loading…' : 'Load Columns'}
+            </button>
+          </div>
+        )}
+
+        {/* Fallback: text inputs */}
+        <Field label="Feature Columns (comma-separated)">
+          <Input value={form.features} onChange={(v) => u('features', v)} placeholder="age, income, credit_score, ..." mono />
+        </Field>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <Field label="Prediction Column"><Input value={form.predictionCol} onChange={(v) => u('predictionCol', v)} mono /></Field>
+          <Field label="Target Column (optional)"><Input value={form.targetCol} onChange={(v) => u('targetCol', v)} mono /></Field>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <Field label="Score Column (optional)"><Input value={form.scoreCol ?? ''} onChange={(v) => u('scoreCol', v)} mono /></Field>
+          <Field label="Timestamp Column (optional)"><Input value={form.timestampCol} onChange={(v) => u('timestampCol', v)} mono /></Field>
+        </div>
+        <Field label="Segment Columns (optional, comma-separated)">
+          <Input value={form.segments} onChange={(v) => u('segments', v)} placeholder="region, channel" mono />
+        </Field>
+      </>
+    )
+  }
+
+  return (
+    <>
+      {/* Feature checkboxes */}
+      <Field label={`Feature Columns — ${selectedFeatures.length} / ${cols.length} selected`}>
+        <div style={{ marginBottom: 8 }}>
+          <button
+            onClick={toggleAll}
+            style={{ background: 'none', border: 'none', color: theme.accent, cursor: 'pointer', fontSize: 12, padding: 0 }}
+          >
+            {allSelected ? 'Deselect All' : 'Select All'}
+          </button>
+        </div>
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+          gap: 6, maxHeight: 180, overflowY: 'auto',
+          background: theme.bgSurface, borderRadius: 8, padding: 10,
+        }}>
+          {cols.map((col) => (
+            <label
+              key={col}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, fontFamily: 'var(--font-mono)' }}
+            >
+              <input
+                type="checkbox"
+                checked={selectedFeatures.includes(col)}
+                onChange={() => toggleFeature(col)}
+                style={{ accentColor: theme.accent }}
+              />
+              <span style={{ color: selectedFeatures.includes(col) ? theme.text : theme.textDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {col}
+              </span>
+            </label>
+          ))}
+        </div>
+      </Field>
+
+      {/* Column dropdowns */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Field label="Prediction Column">
+          <Select value={form.predictionCol} onChange={(v) => u('predictionCol', v)} style={{ width: '100%' }} options={colOptions} />
+        </Field>
+        <Field label="Target Column (optional)">
+          <Select value={form.targetCol} onChange={(v) => u('targetCol', v)} style={{ width: '100%' }} options={colOptions} />
+        </Field>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Field label="Score Column (optional)">
+          <Select value={form.scoreCol ?? ''} onChange={(v) => u('scoreCol', v)} style={{ width: '100%' }} options={colOptions} />
+        </Field>
+        <Field label="Timestamp Column (optional)">
+          <Select value={form.timestampCol} onChange={(v) => u('timestampCol', v)} style={{ width: '100%' }} options={colOptions} />
+        </Field>
+      </div>
+      <Field label="Segment Column (optional)">
+        <Select value={form.segments} onChange={(v) => u('segments', v)} style={{ width: '100%' }} options={colOptions} />
+      </Field>
+    </>
+  )
+}
+
 /* ── wizard ── */
 
 export default function OnboardingWizard({ onClose }) {
@@ -307,18 +559,56 @@ export default function OnboardingWizard({ onClose }) {
   const [baselineFile, setBaselineFile] = useState(null)
   const [prodFile, setProdFile] = useState(null)
   const [connections, setConnections] = useState([])
+  const [loadingColumns, setLoadingColumns] = useState(false)
   const [form, setForm] = useState({
     name: '', version: '1.0.0', type: 'classification', owner: '', team: '',
-    description: '', refSource: 'upload', refPath: '', prodSource: 'upload', prodPath: '',
-    timestampCol: 'event_timestamp', predictionCol: 'prediction', targetCol: 'target',
-    features: '', segments: '', schedule: 'daily', cron: '0 6 * * *',
+    description: '', refSource: 'upload', refPath: '', refConnId: '', prodSource: 'upload', prodPath: '', prodConnId: '',
+    timestampCol: '', predictionCol: '', targetCol: '', scoreCol: '',
+    features: '', selectedFeatures: [], segments: '',
+    scheduleFreq: 'daily', scheduleEveryN: '2', scheduleTime: '06:00', scheduleDay: '1',
+    cron: '0 6 * * *',
     lookback: '7d', engine: 'local', psiWarn: '0.10', psiCrit: '0.25', channels: 'slack',
+    discoveredColumns: [],
   })
   const u = (k, v) => setForm((p) => ({ ...p, [k]: v }))
 
   useEffect(() => {
     api.listConnections().then(setConnections).catch(() => [])
   }, [])
+
+  const applyDiscoveredColumns = (cols) => {
+    if (!cols.length) return
+    const find = (...names) => cols.find((c) => names.includes(c.toLowerCase())) || ''
+    const special = new Set(['dat_ref', 'timestamp', 'event_timestamp', 'date', 'ts',
+      'prediction', 'pred', 'y_pred', 'target', 'label', 'y_true', 'y',
+      'prediction_score', 'score', 'proba', 'probability'])
+    setForm((p) => ({
+      ...p,
+      discoveredColumns: cols,
+      predictionCol: p.predictionCol || find('prediction', 'pred', 'y_pred'),
+      targetCol: p.targetCol || find('target', 'label', 'y_true', 'y'),
+      timestampCol: p.timestampCol || find('dat_ref', 'timestamp', 'event_timestamp', 'date', 'ts'),
+      scoreCol: p.scoreCol || find('prediction_score', 'score', 'proba', 'probability'),
+      selectedFeatures: p.selectedFeatures.length > 0
+        ? p.selectedFeatures
+        : cols.filter((c) => !special.has(c.toLowerCase())),
+    }))
+  }
+
+  // Parse CSV header whenever a baseline file is selected
+  useEffect(() => {
+    if (baselineFile) {
+      parseCSVHeader(baselineFile).then((cols) => { if (cols.length > 0) applyDiscoveredColumns(cols) })
+    }
+  }, [baselineFile])
+
+  const handleLoadColumns = () => {
+    setLoadingColumns(true)
+    api.getConnectionColumns(form.refConnId, form.refPath)
+      .then((res) => { if (res?.columns?.length > 0) applyDiscoveredColumns(res.columns) })
+      .catch(() => {})
+      .finally(() => setLoadingColumns(false))
+  }
 
   const handleCreate = async () => {
     setSubmitting(true)
@@ -338,12 +628,27 @@ export default function OnboardingWizard({ onClose }) {
         psi_crit_threshold: parseFloat(form.psiCrit) || 0.25,
         alert_channels: form.channels ? [form.channels] : [],
         column_mapping: {
-          features: form.features.split(',').map((s) => s.trim()).filter(Boolean),
-          prediction_col: form.predictionCol,
-          target_col: form.targetCol,
-          timestamp_col: form.timestampCol,
-          segment_cols: form.segments.split(',').map((s) => s.trim()).filter(Boolean),
+          features: form.selectedFeatures.length > 0
+            ? form.selectedFeatures
+            : form.features.split(',').map((s) => s.trim()).filter(Boolean),
+          prediction_col: form.predictionCol || '',
+          target_col: form.targetCol || '',
+          timestamp_col: form.timestampCol || '',
+          score_col: form.scoreCol || '',
+          segment_cols: form.segments ? [form.segments] : [],
         },
+        reference_dataset_config: form.refSource !== 'upload' && form.refPath ? {
+          source_type: form.refSource,
+          connection_id: form.refConnId || null,
+          path: form.refPath,
+          format: form.refPath.endsWith('.parquet') ? 'parquet' : 'csv',
+        } : null,
+        inference_dataset_config: form.prodSource !== 'upload' && form.prodPath ? {
+          source_type: form.prodSource,
+          connection_id: form.prodConnId || null,
+          path: form.prodPath,
+          format: form.prodPath.endsWith('.parquet') ? 'parquet' : 'csv',
+        } : null,
       }
       const model = await api.createModel(payload)
 
@@ -441,7 +746,7 @@ export default function OnboardingWizard({ onClose }) {
           {/* Step 2 — Reference Data */}
           {step === 2 && (
             <DataSourceStep
-              sourceKey="refSource" pathKey="refPath"
+              sourceKey="refSource" pathKey="refPath" connIdKey="refConnId"
               form={form} u={u}
               file={baselineFile} setFile={setBaselineFile}
               connections={connections}
@@ -453,7 +758,7 @@ export default function OnboardingWizard({ onClose }) {
           {step === 3 && (
             <>
               <DataSourceStep
-                sourceKey="prodSource" pathKey="prodPath"
+                sourceKey="prodSource" pathKey="prodPath" connIdKey="prodConnId"
                 form={form} u={u}
                 file={prodFile} setFile={setProdFile}
                 connections={connections}
@@ -469,31 +774,19 @@ export default function OnboardingWizard({ onClose }) {
 
           {/* Step 4 — Column Mapping */}
           {step === 4 && (
-            <>
-              <Field label="Feature Columns (comma-separated)">
-                <Input value={form.features} onChange={(v) => u('features', v)} placeholder="age, income, credit_score, tenure_months, ..." mono />
-              </Field>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <Field label="Prediction Column"><Input value={form.predictionCol} onChange={(v) => u('predictionCol', v)} mono /></Field>
-                <Field label="Target Column (optional)"><Input value={form.targetCol} onChange={(v) => u('targetCol', v)} mono /></Field>
-              </div>
-              <Field label="Segment Columns (optional, comma-separated)">
-                <Input value={form.segments} onChange={(v) => u('segments', v)} placeholder="region, channel" mono />
-              </Field>
-            </>
+            <ColumnMappingStep
+              form={form} u={u}
+              discoveredColumns={form.discoveredColumns}
+              onLoadColumns={handleLoadColumns}
+              loadingColumns={loadingColumns}
+            />
           )}
 
           {/* Step 5 — Schedule */}
           {step === 5 && (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <Field label="Schedule">
-                  <Select value={form.schedule} onChange={(v) => u('schedule', v)} style={{ width: '100%' }}
-                    options={[{ value: 'hourly', label: 'Hourly' }, { value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' }, { value: 'custom', label: 'Custom Cron' }]} />
-                </Field>
-                <Field label="Cron Expression"><Input value={form.cron} onChange={(v) => u('cron', v)} mono /></Field>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <ScheduleBuilder form={form} u={u} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
                 <Field label="Lookback Window">
                   <Select value={form.lookback} onChange={(v) => u('lookback', v)} style={{ width: '100%' }}
                     options={[{ value: '1d', label: '1 Day' }, { value: '7d', label: '7 Days' }, { value: '14d', label: '14 Days' }, { value: '30d', label: '30 Days' }]} />
@@ -532,7 +825,7 @@ export default function OnboardingWizard({ onClose }) {
                 ['Production', `${form.prodSource}: ${form.prodPath || (prodFile?.name ?? '—')}`],
                 ['Timestamp', form.timestampCol],
                 ['Prediction', form.predictionCol],
-                ['Schedule', `${form.schedule} (${form.cron})`],
+                ['Schedule', `${cronLabel(form.scheduleFreq, form.scheduleEveryN, form.scheduleTime, form.scheduleDay)} (${form.cron})`],
                 ['Lookback', form.lookback],
                 ['Engine', form.engine],
                 ['Alert Thresholds', `Warning: ${form.psiWarn} | Critical: ${form.psiCrit}`],

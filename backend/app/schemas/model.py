@@ -7,9 +7,18 @@ from pydantic import BaseModel, Field
 class ColumnMapping(BaseModel):
     features: list[str] = Field(default_factory=list)
     prediction_col: str = ""
+    score_col: str = ""       # probability/score column for AUC-ROC
     target_col: str = ""
     timestamp_col: str = ""
     segment_cols: list[str] = Field(default_factory=list)
+
+
+class DataSourceConfig(BaseModel):
+    """Where to load a dataset from. source_type='upload' means use Dataset table."""
+    source_type: str = "upload"       # upload | s3 | gcs | sql | unity_catalog
+    connection_id: str | None = None  # FK to StorageConnection.id
+    path: str = ""                    # S3/GCS URI, SQL table reference, local path
+    format: str = "csv"               # csv | parquet
 
 
 class ModelCreate(BaseModel):
@@ -29,6 +38,8 @@ class ModelCreate(BaseModel):
     psi_crit_threshold: float = 0.25
     alert_cooldown_hours: int = 6
     alert_channels: list[str] = Field(default_factory=list)
+    reference_dataset_config: DataSourceConfig | None = None
+    inference_dataset_config: DataSourceConfig | None = None
 
 
 class ModelUpdate(BaseModel):
@@ -46,6 +57,8 @@ class ModelUpdate(BaseModel):
     psi_warn_threshold: float | None = None
     psi_crit_threshold: float | None = None
     alert_channels: list[str] | None = None
+    reference_dataset_config: DataSourceConfig | None = None
+    inference_dataset_config: DataSourceConfig | None = None
 
 
 class ModelSummary(BaseModel):

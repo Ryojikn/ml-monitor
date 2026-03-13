@@ -4,7 +4,6 @@ Called by the run trigger endpoint and the APScheduler.
 """
 from __future__ import annotations
 
-import asyncio
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,11 +12,15 @@ import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.db.models import Model, Dataset, MonitoringRun, DriftResult, PerformanceResult, QualityResult, Alert
+from app.db.models import (
+    Model, Dataset, MonitoringRun, DriftResult,
+    PerformanceResult, QualityResult, Alert, StorageConnection,
+)
 from app.db.session import AsyncSessionLocal
 from app.engine.drift import compute_all_drift, compute_psi
 from app.engine.quality import compute_all_quality
 from app.engine.performance import compute_classification, compute_regression
+from app.engine.loaders import load_dataframe
 
 
 def _parse_lookback(lookback: str) -> timedelta:
@@ -46,10 +49,90 @@ def _apply_lookback(df: pd.DataFrame, timestamp_col: str, lookback: str) -> tupl
     return df, "", str(datetime.utcnow().date())
 
 
+async def _load_data_for_model(
+    m: Model,
+    db: AsyncSession,
+) -> tuple[pd.DataFrame, pd.DataFrame, str, str]:
+    """
+    Load baseline and inference DataFrames for a model.
+
+    Returns (baseline_df, inference_df, window_start, window_end).
+
+    Strategy:
+    1. If reference_dataset_config / inference_dataset_config are set and
+       source_type != 'upload', load from the configured remote source.
+    2. Otherwise fall back to the Dataset table (uploaded CSV files).
+    """
+    ref_cfg: dict | None = m.reference_dataset_config
+    inf_cfg: dict | None = m.inference_dataset_config
+    cm = m.column_mapping or {}
+    timestamp_col: str = cm.get("timestamp_col", "")
+    lookback = m.lookback_window or "7d"
+
+    # ── connection-based loading ──────────────────────────────────────────────
+    if (
+        ref_cfg and ref_cfg.get("source_type", "upload") != "upload"
+        and inf_cfg and inf_cfg.get("source_type", "upload") != "upload"
+    ):
+        # Fetch connection configs (may be None if connection_id is null)
+        ref_conn_config: dict = {}
+        inf_conn_config: dict = {}
+
+        if ref_cfg.get("connection_id"):
+            r = await db.execute(
+                select(StorageConnection).where(StorageConnection.id == ref_cfg["connection_id"])
+            )
+            conn = r.scalar_one_or_none()
+            if conn:
+                ref_conn_config = conn.config or {}
+
+        if inf_cfg.get("connection_id"):
+            r = await db.execute(
+                select(StorageConnection).where(StorageConnection.id == inf_cfg["connection_id"])
+            )
+            conn = r.scalar_one_or_none()
+            if conn:
+                inf_conn_config = conn.config or {}
+
+        # Time filter for inference data
+        now = datetime.utcnow()
+        window_start_dt = now - _parse_lookback(lookback)
+        time_filter = {"col": timestamp_col, "start": window_start_dt, "end": now} if timestamp_col else None
+
+        baseline_df = await load_dataframe(ref_cfg, ref_conn_config)
+        inference_df = await load_dataframe(inf_cfg, inf_conn_config, time_filter=time_filter)
+
+        window_start = str(window_start_dt.date()) if time_filter else ""
+        window_end = str(now.date())
+        return baseline_df, inference_df, window_start, window_end
+
+    # ── CSV upload fallback ───────────────────────────────────────────────────
+    ds_result = await db.execute(
+        select(Dataset)
+        .where(Dataset.model_id == m.id)
+        .order_by(Dataset.uploaded_at.desc())
+    )
+    datasets = ds_result.scalars().all()
+
+    baseline_ds = next((d for d in datasets if d.role == "baseline"), None)
+    prod_ds = next((d for d in datasets if d.role == "production"), None)
+
+    if not baseline_ds or not prod_ds:
+        raise ValueError(
+            "Missing baseline or production dataset. "
+            "Upload both before triggering a run, or configure connection-based data sources."
+        )
+
+    baseline_df = _load_csv(baseline_ds.file_path)
+    prod_df = _load_csv(prod_ds.file_path)
+    prod_df, window_start, window_end = _apply_lookback(prod_df, timestamp_col, lookback)
+    return baseline_df, prod_df, window_start, window_end
+
+
 async def run_monitoring(model_id: str) -> str:
     """
-    Execute a monitoring run. Returns run_id.
-    This runs in a background task (asyncio.create_task).
+    Execute a monitoring run. Returns run_id (empty string if skipped).
+    Called by the run trigger endpoint and the APScheduler.
     """
     async with AsyncSessionLocal() as db:
         # Load model
@@ -58,30 +141,13 @@ async def run_monitoring(model_id: str) -> str:
         if not m:
             return ""
 
-        # Load datasets (latest baseline + latest production)
-        ds_result = await db.execute(
-            select(Dataset)
-            .where(Dataset.model_id == model_id)
-            .order_by(Dataset.uploaded_at.desc())
-        )
-        datasets = ds_result.scalars().all()
-
-        baseline_ds = next((d for d in datasets if d.role == "baseline"), None)
-        prod_ds = next((d for d in datasets if d.role == "production"), None)
-
-        if not baseline_ds or not prod_ds:
-            # Can't run without both datasets
-            run = MonitoringRun(
-                model_id=model_id,
-                status="failed",
-                engine=m.engine,
-                error_message="Missing baseline or production dataset. Upload both before triggering a run.",
-                completed_at=datetime.utcnow(),
-                duration_seconds=0,
-            )
-            db.add(run)
-            await db.commit()
-            return run.id
+        # ── Idempotency guard: skip if a run is already in progress ──────────
+        running_q = select(MonitoringRun).where(
+            MonitoringRun.model_id == model_id,
+            MonitoringRun.status == "running",
+        ).limit(1)
+        if (await db.execute(running_q)).scalar_one_or_none():
+            return ""   # already running — scheduler or manual trigger overlap
 
         # Create run record
         run = MonitoringRun(model_id=model_id, status="running", engine=m.engine)
@@ -93,28 +159,29 @@ async def run_monitoring(model_id: str) -> str:
         start_time = time.monotonic()
 
         try:
-            # Load data
-            baseline_df = _load_csv(baseline_ds.file_path)
-            prod_df = _load_csv(prod_ds.file_path)
-
-            # Apply lookback window
-            cm = m.column_mapping or {}
-            timestamp_col = cm.get("timestamp_col", "")
-            features: list[str] = cm.get("features", [])
-            prediction_col: str = cm.get("prediction_col", "")
-            target_col: str = cm.get("target_col", "")
-
-            prod_df, window_start, window_end = _apply_lookback(prod_df, timestamp_col, m.lookback_window)
+            # ── Load data ────────────────────────────────────────────────────
+            baseline_df, prod_df, window_start, window_end = await _load_data_for_model(m, db)
 
             run.window_start = window_start
             run.window_end = window_end
             date_label = window_end or str(datetime.utcnow().date())
 
-            # Fallback: use all numeric/string columns if no features configured
-            if not features:
-                features = [c for c in baseline_df.columns if c not in {timestamp_col, prediction_col, target_col}]
+            # ── Column mapping ───────────────────────────────────────────────
+            cm = m.column_mapping or {}
+            timestamp_col: str = cm.get("timestamp_col", "")
+            features: list[str] = cm.get("features", [])
+            prediction_col: str = cm.get("prediction_col", "")
+            score_col: str = cm.get("score_col", "")
+            target_col: str = cm.get("target_col", "")
 
-            # --- Drift computation ---
+            # Fallback: use all non-special columns as features
+            if not features:
+                features = [
+                    c for c in baseline_df.columns
+                    if c not in {timestamp_col, prediction_col, score_col, target_col}
+                ]
+
+            # ── Drift ────────────────────────────────────────────────────────
             drift_results = compute_all_drift(
                 baseline_df, prod_df, features,
                 warn_threshold=m.psi_warn_threshold,
@@ -140,7 +207,7 @@ async def run_monitoring(model_id: str) -> str:
                     current_histogram=dr["current_histogram"],
                 ))
 
-            # --- Quality computation ---
+            # ── Data quality ─────────────────────────────────────────────────
             quality_results = compute_all_quality(prod_df, features)
             for qr in quality_results:
                 db.add(QualityResult(
@@ -154,11 +221,20 @@ async def run_monitoring(model_id: str) -> str:
                     total_count=qr["total_count"],
                 ))
 
-            # --- Performance computation (if target column available) ---
+            # ── Performance ──────────────────────────────────────────────────
             perf_data: dict = {}
             if target_col and target_col in prod_df.columns and prediction_col and prediction_col in prod_df.columns:
-                if m.type in ("classification",):
-                    perf_data = compute_classification(prod_df[target_col], prod_df[prediction_col])
+                if m.type == "classification":
+                    y_score = (
+                        prod_df[score_col]
+                        if score_col and score_col in prod_df.columns
+                        else None
+                    )
+                    perf_data = compute_classification(
+                        prod_df[target_col],
+                        prod_df[prediction_col],
+                        y_score=y_score,
+                    )
                 else:
                     perf_data = compute_regression(prod_df[target_col], prod_df[prediction_col])
 
@@ -183,7 +259,7 @@ async def run_monitoring(model_id: str) -> str:
                 prediction_psi=pred_psi,
             ))
 
-            # --- Update model summary ---
+            # ── Model summary ────────────────────────────────────────────────
             if drift_results:
                 avg_psi = sum(dr["psi"] for dr in drift_results) / len(drift_results)
                 m.global_psi = round(avg_psi, 4)
@@ -204,7 +280,7 @@ async def run_monitoring(model_id: str) -> str:
                 avg_missing = sum(qr["missing_rate"] for qr in quality_results) / len(quality_results)
                 m.dq_score = round(max(0.0, 1.0 - avg_missing), 4)
 
-            # --- Alert evaluation ---
+            # ── Alerts ───────────────────────────────────────────────────────
             await _evaluate_alerts(db, m, run_id, drift_results, date_label)
 
             duration = time.monotonic() - start_time

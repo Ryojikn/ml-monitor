@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.db.session import get_db
 from app.db.models import Model, MonitoringRun, DriftResult, PerformanceResult, QualityResult, Alert, Dataset
 from app.schemas.model import ModelCreate, ModelUpdate, ModelRead, ModelSummary
+from app.scheduler import register_model_job, remove_model_job, reschedule_model_job
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -95,11 +96,18 @@ async def create_model(body: ModelCreate, db: AsyncSession = Depends(get_db)):
         psi_crit_threshold=body.psi_crit_threshold,
         alert_cooldown_hours=body.alert_cooldown_hours,
         alert_channels=body.alert_channels,
+        reference_dataset_config=body.reference_dataset_config.model_dump() if body.reference_dataset_config else None,
+        inference_dataset_config=body.inference_dataset_config.model_dump() if body.inference_dataset_config else None,
         status="inactive",
     )
     db.add(m)
     await db.commit()
     await db.refresh(m)
+    if m.schedule:
+        try:
+            register_model_job(m.id, m.schedule)
+        except Exception:
+            pass
     return await _get_model_detail(m.id, db)
 
 
@@ -112,19 +120,23 @@ async def get_model(model_id: str, db: AsyncSession = Depends(get_db)):
 async def update_model(model_id: str, body: ModelUpdate, db: AsyncSession = Depends(get_db)):
     m = await _fetch_model(model_id, db)
     data = body.model_dump(exclude_none=True)
-    if "column_mapping" in data and isinstance(data["column_mapping"], dict):
-        pass  # already a dict from pydantic
     for k, v in data.items():
-        if k == "column_mapping" and hasattr(v, "model_dump"):
+        if k in ("column_mapping", "reference_dataset_config", "inference_dataset_config") and hasattr(v, "model_dump"):
             v = v.model_dump()
         setattr(m, k, v)
     await db.commit()
+    if "schedule" in data and data["schedule"]:
+        try:
+            reschedule_model_job(model_id, data["schedule"])
+        except Exception:
+            pass
     return await _get_model_detail(model_id, db)
 
 
 @router.delete("/{model_id}", status_code=204)
 async def delete_model(model_id: str, db: AsyncSession = Depends(get_db)):
     m = await _fetch_model(model_id, db)
+    remove_model_job(model_id)
     await db.delete(m)
     await db.commit()
 
@@ -182,6 +194,8 @@ async def _get_model_detail(model_id: str, db: AsyncSession) -> dict:
                 "is_drifted": fd.is_drifted,
                 "severity": fd.severity,
                 "timeline": timeline,
+                "baseline_histogram": fd.baseline_histogram,
+                "current_histogram": fd.current_histogram,
             })
 
     # Performance timeline
@@ -264,6 +278,8 @@ async def _get_model_detail(model_id: str, db: AsyncSession) -> dict:
         "global_psi": m.global_psi,
         "global_perf": m.global_perf,
         "dq_score": m.dq_score,
+        "reference_dataset_config": m.reference_dataset_config,
+        "inference_dataset_config": m.inference_dataset_config,
         "created_at": m.created_at.isoformat(),
         "updated_at": m.updated_at.isoformat(),
         "last_run_at": last_run.triggered_at.isoformat() if last_run else None,

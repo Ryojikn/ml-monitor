@@ -9,6 +9,7 @@ import ModelDetail from './components/ModelDetail.jsx'
 import AlertsView from './components/AlertsView.jsx'
 import SettingsView from './components/SettingsView.jsx'
 import OnboardingWizard from './components/OnboardingWizard.jsx'
+import { Toaster } from 'sonner'
 import { api } from './api.js'
 import { theme } from './utils/theme.js'
 
@@ -184,6 +185,7 @@ export default function App() {
           }}
         />
       )}
+      <Toaster position="bottom-right" theme="dark" richColors />
     </div>
   )
 }

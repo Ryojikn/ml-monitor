@@ -42,6 +42,8 @@ class Model(Base):
     global_psi: Mapped[float] = mapped_column(Float, default=0.0)
     global_perf: Mapped[float] = mapped_column(Float, default=0.0)
     dq_score: Mapped[float] = mapped_column(Float, default=1.0)
+    reference_dataset_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    inference_dataset_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

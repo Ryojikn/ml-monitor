@@ -126,6 +126,9 @@ export const api = {
   browseConnection: (id, path = '') =>
     request(`/connections/${id}/browse?path=${encodeURIComponent(path)}`),
 
+  getConnectionColumns: (id, path = '') =>
+    request(`/connections/${id}/columns?path=${encodeURIComponent(path)}`),
+
   // ── Health ────────────────────────────────
   health: () => request('/health'),
 }

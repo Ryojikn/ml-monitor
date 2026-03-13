@@ -5,7 +5,19 @@ import numpy as np
 import pandas as pd
 
 
-def compute_classification(y_true: pd.Series, y_pred: pd.Series) -> dict:
+def compute_classification(
+    y_true: pd.Series,
+    y_pred: pd.Series,
+    y_score: pd.Series | None = None,
+) -> dict:
+    """
+    Compute classification metrics.
+
+    y_pred  — binary class labels (int), used for accuracy/f1/precision/recall.
+    y_score — continuous probability scores in [0, 1], used for AUC-ROC.
+              When None, auc_roc is returned as None (passing binary labels to
+              roc_auc_score produces balanced_accuracy, not true AUROC).
+    """
     from sklearn.metrics import (
         accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
     )
@@ -22,7 +34,16 @@ def compute_classification(y_true: pd.Series, y_pred: pd.Series) -> dict:
         f1 = float(f1_score(y_true, y_pred.round(), average="weighted", zero_division=0))
         prec = float(precision_score(y_true, y_pred.round(), average="weighted", zero_division=0))
         rec = float(recall_score(y_true, y_pred.round(), average="weighted", zero_division=0))
-        auc = float(roc_auc_score(y_true, y_pred, multi_class="ovr", average="weighted")) if y_true.nunique() == 2 else None
+
+        auc = None
+        if y_score is not None and y_true.nunique() == 2:
+            try:
+                score_aligned = y_score.loc[y_true.index].dropna()
+                true_aligned = y_true.loc[score_aligned.index]
+                auc = float(roc_auc_score(true_aligned, score_aligned))
+            except Exception:
+                auc = None
+
         return {
             "accuracy": round(acc, 4),
             "f1_score": round(f1, 4),

@@ -106,15 +106,17 @@ COLUMN_MAPPING = {
     "timestamp_col":  "dat_ref",   # dd-mm-YYYY partition column
 }
 
-FEATURES        = COLUMN_MAPPING["features"]
-PREDICTION_COL  = COLUMN_MAPPING["prediction_col"]
-TARGET_COL      = COLUMN_MAPPING["target_col"]
-TIMESTAMP_COL   = COLUMN_MAPPING["timestamp_col"]
+FEATURES             = COLUMN_MAPPING["features"]
+PREDICTION_COL       = COLUMN_MAPPING["prediction_col"]
+PREDICTION_SCORE_COL = "prediction_score"   # float probability score for AUC-ROC
+TARGET_COL           = COLUMN_MAPPING["target_col"]
+TIMESTAMP_COL        = COLUMN_MAPPING["timestamp_col"]
 
-print(f"Features        : {FEATURES}")
-print(f"Prediction col  : {PREDICTION_COL}")
-print(f"Target col      : {TARGET_COL}")
-print(f"Timestamp col   : {TIMESTAMP_COL}")
+print(f"Features             : {FEATURES}")
+print(f"Prediction col       : {PREDICTION_COL}")
+print(f"Prediction score col : {PREDICTION_SCORE_COL}")
+print(f"Target col           : {TARGET_COL}")
+print(f"Timestamp col        : {TIMESTAMP_COL}")
 """))
 
 cells.append(code("""\
@@ -148,7 +150,7 @@ print(f"  sample_size          = {SAMPLE_SIZE:,}")
 cells.append(md("### Imports"))
 
 cells.append(code("""\
-import json, uuid, warnings
+import json, uuid, time, warnings
 from collections import defaultdict
 
 import numpy as np
@@ -170,6 +172,10 @@ from pyspark.sql.types  import (
 from pyspark.ml.feature import Bucketizer
 
 warnings.filterwarnings("ignore")
+
+# ── Global timing registry ────────────────────────────────────────────────────
+TIMINGS = {}   # section_name → elapsed seconds
+
 print("All imports OK.")
 """))
 
@@ -192,6 +198,7 @@ os.environ["JAVA_HOME"]             = os.environ.get(
     "JAVA_HOME", "/opt/homebrew/opt/openjdk@17"
 )
 
+_t = time.time()
 spark = (
     SparkSession.builder
     .master("local[*]")
@@ -203,9 +210,11 @@ spark = (
     .getOrCreate()
 )
 spark.sparkContext.setLogLevel("WARN")
+TIMINGS["spark_init"] = time.time() - _t
 
 print(f"Spark {spark.version}  |  master = local[*]")
 print(f"Driver memory : {spark.conf.get('spark.driver.memory')}")
+print(f"⏱ Spark init  : {TIMINGS['spark_init']:.1f}s")
 """))
 
 # ══ 3 · DATA LOADING ═════════════════════════════════════════════════════════
@@ -226,6 +235,8 @@ data/inference/  dat_ref=01-10-2025/  *.snappy.parquet
 """))
 
 cells.append(code("""\
+_t = time.time()
+
 # ── Load baseline ─────────────────────────────────────────────────────────────
 df_baseline = spark.read.parquet(BASELINE_PATH)
 baseline_count = df_baseline.count()
@@ -239,11 +250,15 @@ available_dates = sorted([
 ])
 
 selected_dates = INFERENCE_DATES if INFERENCE_DATES else available_dates
-df_inference = df_inference_full.filter(F.col(TIMESTAMP_COL).isin(selected_dates))
+df_inference   = df_inference_full.filter(F.col(TIMESTAMP_COL).isin(selected_dates))
+inference_count= df_inference.count()
+
+TIMINGS["data_load"] = time.time() - _t
 
 print(f"Baseline  : {baseline_count:>12,} rows   dat_ref = 01-09-2025")
-print(f"Inference : {df_inference.count():>12,} rows   across {len(selected_dates)} windows")
+print(f"Inference : {inference_count:>12,} rows   across {len(selected_dates)} windows")
 print(f"\\nWindows selected: {selected_dates}")
+print(f"\\n⏱ Data load : {TIMINGS['data_load']:.1f}s")
 """))
 
 cells.append(code("""\
@@ -280,6 +295,8 @@ Mirrors `_is_categorical()` in `backend/app/engine/drift.py`:
 """))
 
 cells.append(code("""\
+_t = time.time()
+
 def detect_feature_types(df_ref, features, nunique_threshold=10):
     schema_map = {f.name: str(f.dataType) for f in df_ref.schema.fields}
     numeric, categorical = [], []
@@ -297,9 +314,11 @@ def detect_feature_types(df_ref, features, nunique_threshold=10):
 
 
 NUMERIC_FEATURES, CATEGORICAL_FEATURES = detect_feature_types(df_baseline, FEATURES)
+TIMINGS["type_detection"] = time.time() - _t
 
 print(f"Numeric     ({len(NUMERIC_FEATURES)}): {NUMERIC_FEATURES}")
 print(f"Categorical ({len(CATEGORICAL_FEATURES)}): {CATEGORICAL_FEATURES}")
+print(f"\\n⏱ Type detection : {TIMINGS['type_detection']:.1f}s")
 """))
 
 # ══ 5 · DATA QUALITY ═════════════════════════════════════════════════════════
@@ -337,9 +356,11 @@ print(f"MODEL_ID = {MODEL_ID}")
 """))
 
 cells.append(code("""\
+_t = time.time()
 quality_rows = []
 
 for dat_ref in selected_dates:
+    _tw         = time.time()
     df_window   = df_inference.filter(F.col(TIMESTAMP_COL) == dat_ref)
     total_count = df_window.count()
 
@@ -367,10 +388,12 @@ for dat_ref in selected_dates:
             int(null_count), int(total_count),
         ))
 
-    print(f"  [{dat_ref}] quality computed for {len(FEATURES)} features")
+    print(f"  [{dat_ref}] {len(FEATURES)} features  ⏱ {time.time()-_tw:.1f}s")
 
 quality_df = spark.createDataFrame(quality_rows, schema=QUALITY_SCHEMA)
+TIMINGS["data_quality"] = time.time() - _t
 print(f"\\nquality_df: {quality_df.count()} rows  ({len(FEATURES)} features × {len(selected_dates)} windows)")
+print(f"⏱ Data quality total : {TIMINGS['data_quality']:.1f}s")
 """))
 
 cells.append(code("""\
@@ -445,6 +468,7 @@ def bin_counts_categorical(df, feature):
 """))
 
 cells.append(code("""\
+_t = time.time()
 baseline_histograms = {}
 
 for feat in NUMERIC_FEATURES:
@@ -467,12 +491,15 @@ for feat in CATEGORICAL_FEATURES:
         "counts": counts,
     }
 
+TIMINGS["baseline_histograms"] = time.time() - _t
+
 print(f"{'Feature':<25}  {'Type':<12}  {'Bins':>5}  {'Total rows':>12}")
 print("-" * 60)
 for feat, h in baseline_histograms.items():
     bins  = len(h["counts"])
     total = sum(h["counts"])
     print(f"  {feat:<23}  {h['type']:<12}  {bins:>5}  {total:>12,}")
+print(f"\\n⏱ Baseline histograms : {TIMINGS['baseline_histograms']:.1f}s")
 """))
 
 # ══ 7 · INFERENCE BIN COUNTS ══════════════════════════════════════════════════
@@ -483,9 +510,11 @@ window. This guarantees that PSI / KS / JSD comparisons are made on identical bi
 """))
 
 cells.append(code("""\
+_t = time.time()
 inference_histograms = defaultdict(dict)
 
 for dat_ref in selected_dates:
+    _tw       = time.time()
     df_window = df_inference.filter(F.col(TIMESTAMP_COL) == dat_ref)
 
     for feat in NUMERIC_FEATURES:
@@ -504,9 +533,10 @@ for dat_ref in selected_dates:
         counts     = [counts_map.get(lv, 0) for lv in h["levels"]]
         inference_histograms[dat_ref][feat] = {"type": "categorical", "counts": counts}
 
-    print(f"  [{dat_ref}] inference histograms built for {len(inference_histograms[dat_ref])} features")
+    print(f"  [{dat_ref}] {len(inference_histograms[dat_ref])} features  ⏱ {time.time()-_tw:.1f}s")
 
-print("\\nDone.")
+TIMINGS["inference_histograms"] = time.time() - _t
+print(f"\\n⏱ Inference histograms total : {TIMINGS['inference_histograms']:.1f}s")
 """))
 
 # ══ 8 · PSI ══════════════════════════════════════════════════════════════════
@@ -668,6 +698,7 @@ DRIFT_SCHEMA = StructType([
 """))
 
 cells.append(code("""\
+_t = time.time()
 drift_rows = []
 
 for dat_ref in selected_dates:
@@ -720,9 +751,11 @@ for dat_ref in selected_dates:
         ))
 
 drift_df = spark.createDataFrame(drift_rows, schema=DRIFT_SCHEMA)
+TIMINGS["drift_assembly"] = time.time() - _t
 total = drift_df.count()
 print(f"drift_df: {total} rows  "
       f"({len(FEATURES)} features × {len(selected_dates)} windows = {len(FEATURES)*len(selected_dates)} expected)")
+print(f"⏱ Drift assembly : {TIMINGS['drift_assembly']:.1f}s")
 """))
 
 cells.append(code("""\
@@ -757,6 +790,8 @@ Performance Monitor tab → "Prediction Distribution Drift" chart.
 """))
 
 cells.append(code("""\
+_t = time.time()
+
 # Baseline prediction distribution
 base_pred_rows = df_baseline.groupBy(PREDICTION_COL).count().collect()
 base_pred_map  = {str(r[PREDICTION_COL]): int(r["count"]) for r in base_pred_rows}
@@ -772,13 +807,16 @@ for dat_ref in selected_dates:
     base_counts = [base_pred_map.get(lv, 0) for lv in all_levels]
     cur_counts  = [cur_pred_map.get(lv, 0)  for lv in all_levels]
 
-    pred_psi             = compute_psi(base_counts, cur_counts)
+    pred_psi                = compute_psi(base_counts, cur_counts)
     pred_drift_map[dat_ref] = pred_psi
+
+TIMINGS["prediction_drift"] = time.time() - _t
 
 print(f"{'dat_ref':<15}  {'prediction_psi':>15}  {'severity'}")
 print("-" * 45)
 for d, psi in pred_drift_map.items():
     print(f"  {d:<13}  {psi:>15.4f}  {psi_severity(psi)}")
+print(f"\\n⏱ Prediction drift : {TIMINGS['prediction_drift']:.1f}s")
 """))
 
 # ══ 12 · PERFORMANCE METRICS ═════════════════════════════════════════════════
@@ -810,30 +848,33 @@ PERF_SCHEMA = StructType([
 """))
 
 cells.append(code("""\
+_t = time.time()
 perf_rows = []
 
 for dat_ref in selected_dates:
+    _tw       = time.time()
     df_window = df_inference.filter(F.col(TIMESTAMP_COL) == dat_ref)
     n_total   = df_window.count()
     fraction  = min(1.0, SAMPLE_SIZE / n_total)
 
     sample_pd = (
         df_window
-        .select(TARGET_COL, PREDICTION_COL)
+        .select(TARGET_COL, PREDICTION_COL, PREDICTION_SCORE_COL)
         .sample(fraction=fraction, seed=42)
         .toPandas()
     )
 
-    y_true = sample_pd[TARGET_COL].astype(int).values
-    y_pred = sample_pd[PREDICTION_COL].astype(int).values
+    y_true  = sample_pd[TARGET_COL].astype(int).values
+    y_pred  = sample_pd[PREDICTION_COL].astype(int).values
+    y_score = sample_pd[PREDICTION_SCORE_COL].values   # float probability for AUC-ROC
 
     acc   = float(accuracy_score(y_true, y_pred))
-    f1    = float(f1_score(y_true, y_pred,       average="weighted", zero_division=0))
+    f1    = float(f1_score(y_true, y_pred,        average="weighted", zero_division=0))
     prec  = float(precision_score(y_true, y_pred, average="weighted", zero_division=0))
     rec   = float(recall_score(y_true, y_pred,    average="weighted", zero_division=0))
 
     try:
-        auc = float(roc_auc_score(y_true, y_pred))
+        auc = float(roc_auc_score(y_true, y_score))
     except Exception:
         auc = None
 
@@ -844,10 +885,12 @@ for dat_ref in selected_dates:
         pred_drift_map.get(dat_ref),
     ))
     auc_str = f"{auc:.4f}" if auc is not None else "N/A"
-    print(f"  [{dat_ref}]  n_sampled={len(y_true):>7,}  acc={acc:.4f}  f1={f1:.4f}  auc={auc_str}")
+    print(f"  [{dat_ref}]  n_sampled={len(y_true):>7,}  acc={acc:.4f}  f1={f1:.4f}  auc={auc_str}  ⏱ {time.time()-_tw:.1f}s")
 
 performance_df = spark.createDataFrame(perf_rows, schema=PERF_SCHEMA)
+TIMINGS["performance"] = time.time() - _t
 print(f"\\nperformance_df: {performance_df.count()} rows")
+print(f"⏱ Performance total : {TIMINGS['performance']:.1f}s")
 """))
 
 cells.append(code("""\
@@ -889,6 +932,8 @@ MODEL_SUMMARY_SCHEMA = StructType([
 """))
 
 cells.append(code("""\
+_t = time.time()
+
 # ── Aggregate drift per dat_ref ───────────────────────────────────────────────
 psi_agg_pd = (
     drift_df
@@ -945,7 +990,9 @@ for dat_ref in selected_dates:
     ))
 
 model_summary_df = spark.createDataFrame(summary_rows, schema=MODEL_SUMMARY_SCHEMA)
+TIMINGS["model_summary"] = time.time() - _t
 print(f"model_summary_df: {model_summary_df.count()} rows")
+print(f"⏱ Model summary : {TIMINGS['model_summary']:.1f}s")
 """))
 
 cells.append(code("""\
@@ -981,6 +1028,7 @@ ALERT_SCHEMA = StructType([
     StructField("notified_channels", StringType(), True),  # JSON
 ])
 
+_t = time.time()
 alert_rows = []
 
 for row in drift_df.filter(F.col("psi") >= PSI_WARN_THRESHOLD).collect():
@@ -1005,7 +1053,9 @@ for row in drift_df.filter(F.col("psi") >= PSI_WARN_THRESHOLD).collect():
     ))
 
 alerts_df = spark.createDataFrame(alert_rows, schema=ALERT_SCHEMA)
+TIMINGS["alerts"] = time.time() - _t
 print(f"alerts_df: {alerts_df.count()} alerts triggered")
+print(f"⏱ Alert evaluation : {TIMINGS['alerts']:.1f}s")
 """))
 
 cells.append(code("""\
@@ -1025,8 +1075,30 @@ alerts_df \\
     .show(truncate=False)
 """))
 
-# ══ 15 · FINAL SUMMARY ═══════════════════════════════════════════════════════
-cells.append(md("""## 14 · Final Summary
+# ══ 15 · TIMING SUMMARY ══════════════════════════════════════════════════════
+cells.append(md("""## 14 · Timing Summary
+
+Wall-clock time per pipeline section, measured on `local[*]` with a 200 000-row
+sample for performance metrics (v1).
+"""))
+
+cells.append(code("""\
+print("=" * 60)
+print("  PIPELINE TIMING SUMMARY (local[*], SAMPLE_SIZE=200k)")
+print("=" * 60)
+print(f"  {'Section':<30}  {'Elapsed':>10}")
+print("-" * 46)
+total_wall = 0.0
+for section, elapsed in TIMINGS.items():
+    print(f"  {section:<30}  {elapsed:>9.1f}s")
+    total_wall += elapsed
+print("-" * 46)
+print(f"  {'TOTAL':<30}  {total_wall:>9.1f}s")
+print("=" * 60)
+"""))
+
+# ══ 16 · FINAL SUMMARY ════════════════════════════════════════════════════════
+cells.append(md("""## 15 · Final Summary
 
 All five output DataFrames and their row counts.
 """))
