@@ -8,6 +8,9 @@ dist/
 dist-ssr/
 *.local
 
+data/baseline/*
+data/inference/*
+data/csv/*
 # IDE
 .vscode/*
 !.vscode/extensions.json

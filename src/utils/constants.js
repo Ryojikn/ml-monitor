@@ -13,6 +13,14 @@ export const STATUSES = ['healthy', 'warning', 'critical', 'inactive']
 
 export const ENGINES = ['local', 'spark', 'dask', 'ray', 'sql']
 
+export const SOURCE_TYPES = [
+  { value: 's3',            label: 'AWS S3' },
+  { value: 'gcs',           label: 'Google Cloud Storage' },
+  { value: 'sql',           label: 'SQL Database' },
+  { value: 'unity_catalog', label: 'Unity Catalog' },
+  { value: 'upload',        label: 'Direct Upload (CSV)' },
+]
+
 export const FEATURES_POOL = [
   'age', 'income', 'credit_score', 'tenure_months', 'num_products',
   'balance', 'is_active', 'num_transactions', 'avg_transaction_amt',
