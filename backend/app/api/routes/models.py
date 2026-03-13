@@ -25,6 +25,7 @@ def _build_model_summary(m: Model, last_run: MonitoringRun | None, psi_timeline:
         "global_psi": m.global_psi,
         "global_perf": m.global_perf,
         "dq_score": m.dq_score,
+        "is_demo": m.is_demo,
         "created_at": m.created_at.isoformat(),
         "updated_at": m.updated_at.isoformat(),
         "last_run_at": last_run.triggered_at.isoformat() if last_run else None,
@@ -38,6 +39,7 @@ async def list_models(
     team: str = "",
     type: str = "",
     status: str = "",
+    is_demo: bool | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     q = select(Model)
@@ -49,6 +51,8 @@ async def list_models(
         q = q.where(Model.type == type)
     if status:
         q = q.where(Model.status == status)
+    if is_demo is not None:
+        q = q.where(Model.is_demo == is_demo)
 
     result = await db.execute(q.order_by(Model.updated_at.desc()))
     models = result.scalars().all()

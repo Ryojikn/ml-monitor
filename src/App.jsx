@@ -19,16 +19,20 @@ export default function App() {
   const [showWizard, setShowWizard] = useState(false)
   const [now, setNow]               = useState(new Date())
   const [models, setModels]         = useState([])
+  const [demoModels, setDemoModels] = useState([])
+  const [overviewTab, setOverviewTab] = useState('models')
   const [alerts, setAlerts]         = useState([])
   const [loading, setLoading]       = useState(true)
 
   const fetchData = useCallback(() => {
     setLoading(true)
     Promise.all([
-      api.listModels().catch(() => ({ items: [] })),
+      api.listModels({ is_demo: false }).catch(() => ({ items: [] })),
+      api.listModels({ is_demo: true }).catch(() => ({ items: [] })),
       api.listAlerts().catch(() => ({ items: [] })),
-    ]).then(([modelsRes, alertsRes]) => {
+    ]).then(([modelsRes, demoRes, alertsRes]) => {
       setModels(modelsRes.items ?? [])
+      setDemoModels(demoRes.items ?? [])
       setAlerts(alertsRes.items ?? [])
     }).finally(() => setLoading(false))
   }, [])
@@ -149,6 +153,9 @@ export default function App() {
         {view === 'overview' && (
           <ModelOverview
             models={models}
+            demoModels={demoModels}
+            overviewTab={overviewTab}
+            onTabChange={setOverviewTab}
             loading={loading}
             onSelect={handleSelectModel}
             onNewModel={() => setShowWizard(true)}
@@ -168,7 +175,7 @@ export default function App() {
         )}
 
         {view === 'alerts' && (
-          <AlertsView alerts={alerts} models={models} onRefresh={fetchData} />
+          <AlertsView alerts={alerts} models={[...models, ...demoModels]} onSelectModel={handleSelectModel} onRefresh={fetchData} />
         )}
 
         {view === 'settings' && (

@@ -51,6 +51,7 @@ async def list_alerts(
             "notified_channels": a.notified_channels,
             "created_at": a.created_at.isoformat(),
             "resolved_at": a.resolved_at.isoformat() if a.resolved_at else None,
+            "assigned_to": a.assigned_to,
         }
         for a in rows
     ]
@@ -69,9 +70,12 @@ async def update_alert(alert_id: str, body: AlertUpdate, db: AsyncSession = Depe
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    alert.status = body.status
-    if body.status == "resolved":
-        alert.resolved_at = datetime.utcnow()
+    if body.status is not None:
+        alert.status = body.status
+        if body.status == "resolved":
+            alert.resolved_at = datetime.utcnow()
+    if body.assigned_to is not None:
+        alert.assigned_to = body.assigned_to
     await db.commit()
     await db.refresh(alert)
 
@@ -79,5 +83,6 @@ async def update_alert(alert_id: str, body: AlertUpdate, db: AsyncSession = Depe
         "id": alert.id,
         "model_id": alert.model_id,
         "status": alert.status,
+        "assigned_to": alert.assigned_to,
         "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at else None,
     }

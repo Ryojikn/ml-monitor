@@ -44,6 +44,7 @@ class Model(Base):
     dq_score: Mapped[float] = mapped_column(Float, default=1.0)
     reference_dataset_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     inference_dataset_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -166,6 +167,7 @@ class Alert(Base):
     notified_channels: Mapped[List] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    assigned_to: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
     model: Mapped["Model"] = relationship(back_populates="alerts")
 

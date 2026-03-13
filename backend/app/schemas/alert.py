@@ -17,9 +17,11 @@ class AlertRead(BaseModel):
     notified_channels: list[str]
     created_at: datetime
     resolved_at: datetime | None
+    assigned_to: str | None
 
     model_config = {"from_attributes": True}
 
 
 class AlertUpdate(BaseModel):
-    status: str  # acknowledged | resolved
+    status: str | None = None
+    assigned_to: str | None = None

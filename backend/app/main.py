@@ -2,12 +2,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.config import settings
 from app.db.base import Base
 from app.db.session import engine, AsyncSessionLocal
 from app.db.models import Model
+from app.db.seed import seed_demo_models
 from app.api.v1 import router as v1_router
 from app.scheduler import scheduler, register_model_job
 
@@ -17,14 +18,27 @@ async def lifespan(app: FastAPI):
     # 1. Create tables on startup (dev convenience; Alembic handles schema evolution)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add is_demo column to existing DBs that predate this column
+        try:
+            await conn.execute(text("ALTER TABLE models ADD COLUMN is_demo BOOLEAN NOT NULL DEFAULT FALSE"))
+        except Exception:
+            pass  # column already exists — safe to ignore
+        try:
+            await conn.execute(text("ALTER TABLE alerts ADD COLUMN assigned_to TEXT"))
+        except Exception:
+            pass  # column already exists — safe to ignore
 
-    # 2. Ensure upload dir exists
+    # 2. Seed demo models (idempotent — no-op if already seeded)
+    async with AsyncSessionLocal() as db:
+        await seed_demo_models(db)
+
+    # 3. Ensure upload dir exists
     settings.upload_path.mkdir(parents=True, exist_ok=True)
 
-    # 3. Start the scheduler
+    # 4. Start the scheduler
     scheduler.start()
 
-    # 4. Register cron jobs for all models that have a schedule
+    # 5. Register cron jobs for all models that have a schedule
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(Model).where(Model.schedule != None, Model.schedule != "")
