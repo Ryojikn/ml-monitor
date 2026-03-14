@@ -129,6 +129,30 @@ export const api = {
   getConnectionColumns: (id, path = '') =>
     request(`/connections/${id}/columns?path=${encodeURIComponent(path)}`),
 
+  // ── API Keys ─────────────────────────────
+  listApiKeys: () => request('/api-keys'),
+
+  createApiKey: (body) =>
+    request('/api-keys', { method: 'POST', body: JSON.stringify(body) }),
+
+  revokeApiKey: (id) =>
+    request(`/api-keys/${id}`, { method: 'DELETE' }),
+
+  // ── Notifications ─────────────────────────
+  listNotifications: () => request('/notifications'),
+
+  createNotification: (body) =>
+    request('/notifications', { method: 'POST', body: JSON.stringify(body) }),
+
+  updateNotification: (id, body) =>
+    request(`/notifications/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  deleteNotification: (id) =>
+    request(`/notifications/${id}`, { method: 'DELETE' }),
+
+  testNotification: (id) =>
+    request(`/notifications/${id}/test`, { method: 'POST' }),
+
   // ── Health ────────────────────────────────
   health: () => request('/health'),
 }

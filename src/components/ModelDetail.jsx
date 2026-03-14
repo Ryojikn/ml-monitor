@@ -3,6 +3,7 @@
    ═══════════════════════════════════════════ */
 
 import { useState, useMemo, useEffect, useRef } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import {
   AreaChart, Area, BarChart, Bar, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -205,7 +206,17 @@ const TABS = [
 ]
 
 export default function ModelDetail({ model: m, onBack, onRefresh }) {
-  const [tab, setTab]                   = useState('drift')
+  const { tab: urlTab } = useParams()
+  const navigate = useNavigate()
+  const [tab, setTab] = useState(urlTab || 'drift')
+
+  // Sync tab with URL when navigating via browser back/forward
+  useEffect(() => { setTab(urlTab || 'drift') }, [urlTab])
+
+  const handleTabChange = (newTab) => {
+    setTab(newTab)
+    navigate(`/models/${m.id}/${newTab}`, { replace: true })
+  }
   const [selectedFeature, setFeature]   = useState(null)
   const [histData, setHistData]         = useState(null)
   const [runPending, setRunPending]     = useState(false)
@@ -355,7 +366,7 @@ export default function ModelDetail({ model: m, onBack, onRefresh }) {
           icon="activity" subtitle={m.type === 'regression' ? 'R²' : 'AUC-ROC'} />
       </div>
 
-      <TabBar tabs={TABS} active={tab} onChange={setTab} />
+      <TabBar tabs={TABS} active={tab} onChange={handleTabChange} />
 
       {/* ════════════════════════ DRIFT TAB ════════════════════════ */}
       {tab === 'drift' && (

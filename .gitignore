@@ -8,6 +8,7 @@ dist/
 dist-ssr/
 *.local
 
+*/*.db
 data/baseline/*
 data/inference/*
 data/csv/*

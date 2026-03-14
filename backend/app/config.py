@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./mlmonitor.db"
     upload_dir: Path = Path("./uploads")
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+    frontend_base_url: str = "http://localhost:3000"
 
     @property
     def upload_path(self) -> Path:

@@ -3,6 +3,15 @@
    ═══════════════════════════════════════════ */
 
 import { useState, useEffect, useCallback } from 'react'
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useNavigate,
+  useLocation,
+  useParams,
+} from 'react-router-dom'
 import Icon from './components/Icon.jsx'
 import ModelOverview from './components/ModelOverview.jsx'
 import ModelDetail from './components/ModelDetail.jsx'
@@ -13,9 +22,48 @@ import { Toaster } from 'sonner'
 import { api } from './api.js'
 import { theme } from './utils/theme.js'
 
-export default function App() {
-  const [view, setView]             = useState('overview')
-  const [selectedModel, setModel]   = useState(null)
+/* ── ModelDetailRoute: fetches model by URL param ── */
+function ModelDetailRoute({ onRefresh }) {
+  const { modelId } = useParams()
+  const navigate = useNavigate()
+  const [model, setModel] = useState(null)
+  const [notFound, setNotFound] = useState(false)
+
+  useEffect(() => {
+    setModel(null)
+    setNotFound(false)
+    api.getModel(modelId)
+      .then(setModel)
+      .catch(() => setNotFound(true))
+  }, [modelId])
+
+  if (notFound) return <Navigate to="/" replace />
+  if (!model) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, color: theme.textDim, fontSize: 13 }}>
+        Loading model…
+      </div>
+    )
+  }
+
+  return (
+    <ModelDetail
+      model={model}
+      onBack={() => navigate('/')}
+      onRefresh={async (id) => {
+        const m = await api.getModel(id)
+        setModel(m)
+        onRefresh()
+      }}
+    />
+  )
+}
+
+/* ── AppShell: layout + data fetching ── */
+function AppShell() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
   const [showWizard, setShowWizard] = useState(false)
   const [now, setNow]               = useState(new Date())
   const [models, setModels]         = useState([])
@@ -39,22 +87,21 @@ export default function App() {
 
   useEffect(() => {
     fetchData()
-    const id = setInterval(() => setNow(new Date()), 60_000)
+    const id = setInterval(() => {
+      setNow(new Date())
+      fetchData()
+    }, 30_000)
     return () => clearInterval(id)
   }, [fetchData])
 
-  // When a model is selected, fetch full detail
-  const handleSelectModel = useCallback(async (m) => {
-    try {
-      const detail = await api.getModel(m.id)
-      setModel(detail)
-    } catch {
-      setModel(m)
-    }
-    setView('detail')
-  }, [])
-
   const openAlerts = alerts.filter((a) => a.status === 'open').length
+  const path = location.pathname
+
+  const NAV = [
+    { path: '/',         match: (p) => p === '/' || p.startsWith('/models'),  label: 'Models',   icon: 'grid' },
+    { path: '/alerts',   match: (p) => p === '/alerts',                        label: 'Alerts',   icon: 'bell' },
+    { path: '/settings', match: (p) => p.startsWith('/settings'),              label: 'Settings', icon: 'settings' },
+  ]
 
   return (
     <div style={{ minHeight: '100vh', background: theme.bg, color: theme.text, fontFamily: "var(--font-body, 'DM Sans', system-ui, sans-serif)" }}>
@@ -75,7 +122,10 @@ export default function App() {
         }}
       >
         {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
+          onClick={() => navigate('/')}
+        >
           <div
             style={{
               width: 32, height: 32, borderRadius: 8,
@@ -100,44 +150,39 @@ export default function App() {
 
         {/* Nav */}
         <nav style={{ display: 'flex', gap: 2, marginLeft: 20 }}>
-          {[
-            { key: 'overview',  label: 'Models',   icon: 'grid' },
-            { key: 'alerts',    label: 'Alerts',   icon: 'bell' },
-            { key: 'settings',  label: 'Settings', icon: 'settings' },
-          ].map((n) => (
-            <button
-              key={n.key}
-              onClick={() => { setView(n.key); setModel(null) }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '6px 14px', borderRadius: 8,
-                border: 'none', cursor: 'pointer',
-                fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
-                background: (view === n.key || (n.key === 'overview' && view === 'detail'))
-                  ? theme.accent + '18'
-                  : 'transparent',
-                color: (view === n.key || (n.key === 'overview' && view === 'detail'))
-                  ? theme.accent
-                  : theme.textMuted,
-                transition: 'all 0.15s',
-              }}
-            >
-              <Icon name={n.icon} size={14} />
-              {n.label}
-              {n.key === 'alerts' && openAlerts > 0 && (
-                <span
-                  style={{
-                    background: theme.red, color: '#fff',
-                    fontSize: 10, fontWeight: 700,
-                    padding: '1px 6px', borderRadius: 10,
-                    minWidth: 18, textAlign: 'center',
-                  }}
-                >
-                  {openAlerts}
-                </span>
-              )}
-            </button>
-          ))}
+          {NAV.map((n) => {
+            const active = n.match(path)
+            return (
+              <button
+                key={n.path}
+                onClick={() => navigate(n.path)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '6px 14px', borderRadius: 8,
+                  border: 'none', cursor: 'pointer',
+                  fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
+                  background: active ? theme.accent + '18' : 'transparent',
+                  color: active ? theme.accent : theme.textMuted,
+                  transition: 'all 0.15s',
+                }}
+              >
+                <Icon name={n.icon} size={14} />
+                {n.label}
+                {n.label === 'Alerts' && openAlerts > 0 && (
+                  <span
+                    style={{
+                      background: theme.red, color: '#fff',
+                      fontSize: 10, fontWeight: 700,
+                      padding: '1px 6px', borderRadius: 10,
+                      minWidth: 18, textAlign: 'center',
+                    }}
+                  >
+                    {openAlerts}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </nav>
 
         <div style={{ flex: 1 }} />
@@ -150,37 +195,38 @@ export default function App() {
 
       {/* ═══════════ Content ═══════════ */}
       <main style={{ maxWidth: 1280, margin: '0 auto', padding: '24px 24px 60px' }}>
-        {view === 'overview' && (
-          <ModelOverview
-            models={models}
-            demoModels={demoModels}
-            overviewTab={overviewTab}
-            onTabChange={setOverviewTab}
-            loading={loading}
-            onSelect={handleSelectModel}
-            onNewModel={() => setShowWizard(true)}
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <ModelOverview
+                models={models}
+                demoModels={demoModels}
+                overviewTab={overviewTab}
+                onTabChange={setOverviewTab}
+                loading={loading}
+                onSelect={(m) => navigate('/models/' + m.id)}
+                onNewModel={() => setShowWizard(true)}
+              />
+            }
           />
-        )}
-
-        {view === 'detail' && selectedModel && (
-          <ModelDetail
-            model={selectedModel}
-            onBack={() => { setModel(null); setView('overview') }}
-            onRefresh={async (id) => {
-              const detail = await api.getModel(id)
-              setModel(detail)
-              fetchData()
-            }}
+          <Route path="/models/:modelId" element={<ModelDetailRoute onRefresh={fetchData} />} />
+          <Route path="/models/:modelId/:tab" element={<ModelDetailRoute onRefresh={fetchData} />} />
+          <Route
+            path="/alerts"
+            element={
+              <AlertsView
+                alerts={alerts}
+                models={[...models, ...demoModels]}
+                onSelectModel={(m) => navigate('/models/' + m.id)}
+                onRefresh={fetchData}
+              />
+            }
           />
-        )}
-
-        {view === 'alerts' && (
-          <AlertsView alerts={alerts} models={[...models, ...demoModels]} onSelectModel={handleSelectModel} onRefresh={fetchData} />
-        )}
-
-        {view === 'settings' && (
-          <SettingsView />
-        )}
+          <Route path="/settings" element={<Navigate to="/settings/connections" replace />} />
+          <Route path="/settings/:tab" element={<SettingsView />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </main>
 
       {/* ═══════════ Wizard overlay ═══════════ */}
@@ -194,5 +240,13 @@ export default function App() {
       )}
       <Toaster position="bottom-right" theme="dark" richColors />
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppShell />
+    </BrowserRouter>
   )
 }

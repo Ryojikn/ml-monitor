@@ -281,7 +281,16 @@ async def run_monitoring(model_id: str) -> str:
                 m.dq_score = round(max(0.0, 1.0 - avg_missing), 4)
 
             # ── Alerts ───────────────────────────────────────────────────────
-            await _evaluate_alerts(db, m, run_id, drift_results, date_label)
+            new_alerts = await _evaluate_alerts(
+                db, m, run_id, drift_results, quality_results, perf_data, date_label
+            )
+
+            # ── Model status — worst of drift / quality / perf ────────────────
+            severities = {a.severity for a in new_alerts}
+            if "CRITICAL" in severities and m.status != "critical":
+                m.status = "critical"
+            elif "WARNING" in severities and m.status == "healthy":
+                m.status = "warning"
 
             duration = time.monotonic() - start_time
             run.status = "success"
@@ -294,9 +303,59 @@ async def run_monitoring(model_id: str) -> str:
             run.error_message = str(exc)
             run.completed_at = datetime.utcnow()
             run.duration_seconds = round(duration, 2)
+            new_alerts = []
 
         await db.commit()
+
+        # Dispatch notifications after commit so alert IDs are assigned
+        if new_alerts:
+            from app.alerts.dispatcher import dispatch_alert_notifications
+            await dispatch_alert_notifications(db, new_alerts)
+
         return run_id
+
+
+async def _maybe_add_alert(
+    db: AsyncSession,
+    new_alerts: list[Alert],
+    *,
+    model: Model,
+    run_id: str,
+    severity: str,
+    metric_name: str,
+    metric_value: float,
+    threshold: float,
+    message: str,
+    feature_name: str | None,
+    now: datetime,
+) -> None:
+    """Insert an alert if not in cooldown, appending to new_alerts."""
+    cooldown_q = select(Alert).where(
+        Alert.model_id == model.id,
+        Alert.metric_name == metric_name,
+        Alert.feature_name == feature_name,
+        Alert.severity == severity,
+        Alert.status == "open",
+        Alert.cooldown_until > now,
+    )
+    if (await db.execute(cooldown_q)).scalar_one_or_none():
+        return
+
+    alert = Alert(
+        model_id=model.id,
+        run_id=run_id,
+        severity=severity,
+        metric_name=metric_name,
+        metric_value=metric_value,
+        threshold=threshold,
+        message=message,
+        feature_name=feature_name,
+        cooldown_until=now + timedelta(hours=model.alert_cooldown_hours),
+        notified_channels=model.alert_channels,
+        status="open",
+    )
+    db.add(alert)
+    new_alerts.append(alert)
 
 
 async def _evaluate_alerts(
@@ -304,49 +363,155 @@ async def _evaluate_alerts(
     model: Model,
     run_id: str,
     drift_results: list[dict],
+    quality_results: list[dict],
+    perf_data: dict,
     date_label: str,
-) -> None:
-    """Check drift results against thresholds and insert alerts with cooldown logic."""
+) -> list[Alert]:
+    """
+    Evaluate drift, quality, and performance results against thresholds.
+    Returns newly created Alert objects (before commit).
+    """
     now = datetime.utcnow()
+    new_alerts: list[Alert] = []
 
+    # ── Feature Drift (PSI) ───────────────────────────────────────────────────
     for dr in drift_results:
         psi = dr["psi"]
-        severity = None
-        threshold = None
-
         if psi >= model.psi_crit_threshold:
-            severity = "CRITICAL"
-            threshold = model.psi_crit_threshold
+            severity, threshold = "CRITICAL", model.psi_crit_threshold
         elif psi >= model.psi_warn_threshold:
-            severity = "WARNING"
-            threshold = model.psi_warn_threshold
-
-        if not severity:
+            severity, threshold = "WARNING", model.psi_warn_threshold
+        else:
             continue
 
-        # Check cooldown: find any open alert for same (model, feature, severity) not yet past cooldown
-        existing_q = select(Alert).where(
-            Alert.model_id == model.id,
-            Alert.feature_name == dr["feature_name"],
-            Alert.severity == severity,
-            Alert.status == "open",
-            Alert.cooldown_until > now,
-        )
-        existing = await db.execute(existing_q)
-        if existing.scalar_one_or_none():
-            continue  # still in cooldown
-
-        cooldown_until = now + timedelta(hours=model.alert_cooldown_hours)
-        db.add(Alert(
-            model_id=model.id,
-            run_id=run_id,
+        await _maybe_add_alert(
+            db, new_alerts,
+            model=model, run_id=run_id,
             severity=severity,
-            metric_name="PSI",
+            metric_name="psi",
             metric_value=psi,
             threshold=threshold,
             message=f"Feature '{dr['feature_name']}' PSI={psi:.3f} exceeds {severity.lower()} threshold {threshold:.2f}",
             feature_name=dr["feature_name"],
-            cooldown_until=cooldown_until,
-            notified_channels=model.alert_channels,
-            status="open",
-        ))
+            now=now,
+        )
+
+    # ── Data Quality ──────────────────────────────────────────────────────────
+    # Thresholds: missing_rate WARN>=15%, CRIT>=30%  |  outlier_rate WARN>=10%, CRIT>=20%
+    MISSING_WARN, MISSING_CRIT = 0.15, 0.30
+    OUTLIER_WARN, OUTLIER_CRIT = 0.10, 0.20
+
+    for qr in quality_results:
+        feat = qr["feature_name"]
+
+        miss = qr.get("missing_rate", 0.0)
+        if miss >= MISSING_CRIT:
+            sev = "CRITICAL"
+        elif miss >= MISSING_WARN:
+            sev = "WARNING"
+        else:
+            sev = None
+
+        if sev:
+            thr = MISSING_CRIT if sev == "CRITICAL" else MISSING_WARN
+            await _maybe_add_alert(
+                db, new_alerts,
+                model=model, run_id=run_id,
+                severity=sev,
+                metric_name="missing_rate",
+                metric_value=round(miss, 4),
+                threshold=thr,
+                message=f"Feature '{feat}' missing rate {miss:.1%} exceeds {sev.lower()} threshold {thr:.0%}",
+                feature_name=feat,
+                now=now,
+            )
+
+        out = qr.get("outlier_rate", 0.0)
+        if out >= OUTLIER_CRIT:
+            sev = "CRITICAL"
+        elif out >= OUTLIER_WARN:
+            sev = "WARNING"
+        else:
+            sev = None
+
+        if sev:
+            thr = OUTLIER_CRIT if sev == "CRITICAL" else OUTLIER_WARN
+            await _maybe_add_alert(
+                db, new_alerts,
+                model=model, run_id=run_id,
+                severity=sev,
+                metric_name="outlier_rate",
+                metric_value=round(out, 4),
+                threshold=thr,
+                message=f"Feature '{feat}' outlier rate {out:.1%} exceeds {sev.lower()} threshold {thr:.0%}",
+                feature_name=feat,
+                now=now,
+            )
+
+    # ── Performance ───────────────────────────────────────────────────────────
+    # For "higher is better" metrics: AUC, R², Accuracy, F1, Precision, Recall
+    # WARN if below warn_threshold, CRIT if below crit_threshold.
+    # Thresholds are sensible defaults; could be made per-model in the future.
+    PERF_THRESHOLDS: dict[str, tuple[float, float]] = {
+        # metric: (crit_below, warn_below)
+        "auc_roc":   (0.70, 0.80),
+        "r2":        (0.50, 0.70),
+        "accuracy":  (0.70, 0.80),
+        "f1_score":  (0.65, 0.78),
+        "precision": (0.60, 0.75),
+        "recall":    (0.60, 0.75),
+    }
+    # "lower is better" metrics — WARN if above warn_threshold, CRIT if above crit_threshold
+    PERF_THRESHOLDS_HIGH: dict[str, tuple[float, float]] = {
+        # metric: (warn_above, crit_above)  — relative values, only fire if non-zero
+        "mae":  (0.20, 0.40),
+        "rmse": (0.25, 0.50),
+    }
+
+    for metric, (crit_below, warn_below) in PERF_THRESHOLDS.items():
+        val = perf_data.get(metric)
+        if val is None:
+            continue
+        if val < crit_below:
+            sev, thr = "CRITICAL", crit_below
+        elif val < warn_below:
+            sev, thr = "WARNING", warn_below
+        else:
+            continue
+
+        await _maybe_add_alert(
+            db, new_alerts,
+            model=model, run_id=run_id,
+            severity=sev,
+            metric_name=metric,
+            metric_value=round(val, 4),
+            threshold=thr,
+            message=f"{metric.upper()} {val:.3f} is below {sev.lower()} threshold {thr:.2f}",
+            feature_name=None,
+            now=now,
+        )
+
+    for metric, (warn_above, crit_above) in PERF_THRESHOLDS_HIGH.items():
+        val = perf_data.get(metric)
+        if val is None or val == 0:
+            continue
+        if val >= crit_above:
+            sev, thr = "CRITICAL", crit_above
+        elif val >= warn_above:
+            sev, thr = "WARNING", warn_above
+        else:
+            continue
+
+        await _maybe_add_alert(
+            db, new_alerts,
+            model=model, run_id=run_id,
+            severity=sev,
+            metric_name=metric,
+            metric_value=round(val, 4),
+            threshold=thr,
+            message=f"{metric.upper()} {val:.3f} exceeds {sev.lower()} threshold {thr:.2f}",
+            feature_name=None,
+            now=now,
+        )
+
+    return new_alerts
