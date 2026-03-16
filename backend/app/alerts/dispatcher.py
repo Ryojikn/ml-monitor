@@ -142,3 +142,125 @@ async def _send(
         }
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(url, json=payload, headers=headers)
+
+
+async def dispatch_assignment_notification(
+    db: AsyncSession,
+    alert: Alert,
+    model_name: str,
+    team: str,
+    assignee_display_name: str,
+    assignee_email: str,
+) -> None:
+    """Notify all enabled channels when an alert is assigned to a user."""
+    result = await db.execute(
+        select(NotificationChannel).where(NotificationChannel.enabled == True)  # noqa: E712
+    )
+    channels = result.scalars().all()
+    if not channels:
+        return
+
+    model_url = f"{settings.frontend_base_url}/models/{alert.model_id}"
+    severity_emoji = {"CRITICAL": "🔴", "WARNING": "🟡"}.get(alert.severity, "⚪")
+    text = (
+        f"🔔 *Alert Assigned — {alert.severity}*\n"
+        f"Assigned to: *{assignee_display_name}* ({assignee_email})\n"
+        f"Model: {model_name} ({team} team)\n"
+        f"Metric: {alert.metric_name} = {alert.metric_value:.4f} (threshold {alert.threshold})\n"
+        f"{alert.message}\n"
+        f"View model: {model_url}"
+    )
+
+    import httpx
+    import smtplib as _smtplib
+    from email.mime.text import MIMEText as _MIMEText
+
+    for ch in channels:
+        try:
+            cfg = ch.config
+            if ch.type == "slack":
+                url = cfg.get("webhook_url", "")
+                if url:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        await client.post(url, json={"text": text})
+
+            elif ch.type == "pagerduty":
+                key = cfg.get("integration_key", "")
+                if key:
+                    payload = {
+                        "routing_key": key,
+                        "event_action": "trigger",
+                        "dedup_key": f"mlmonitor-assign-{alert.id}",
+                        "payload": {
+                            "summary": f"Alert assigned to {assignee_display_name}: {alert.message}",
+                            "severity": "critical" if alert.severity == "CRITICAL" else "warning",
+                            "source": "mlmonitor",
+                            "custom_details": {
+                                "assignee": assignee_display_name,
+                                "assignee_email": assignee_email,
+                                "model": model_name,
+                                "team": team,
+                                "metric_name": alert.metric_name,
+                                "metric_value": alert.metric_value,
+                                "model_url": model_url,
+                            },
+                        },
+                    }
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        await client.post("https://events.pagerduty.com/v2/enqueue", json=payload)
+
+            elif ch.type == "email":
+                recipients_raw = cfg.get("recipients", "")
+                host = cfg.get("smtp_host", "")
+                if recipients_raw and host:
+                    port = int(cfg.get("smtp_port", 587))
+                    user = cfg.get("smtp_user", "")
+                    password = cfg.get("smtp_pass", "")
+                    from_addr = cfg.get("from_addr", user or "mlmonitor@localhost")
+                    # Include assignee in recipients
+                    recipients = list({r.strip() for r in recipients_raw.split(",") if r.strip()} | {assignee_email})
+
+                    msg = _MIMEText(text)
+                    msg["Subject"] = f"Alert assigned to you: {alert.metric_name} on {model_name}"
+                    msg["From"] = from_addr
+                    msg["To"] = ", ".join(recipients)
+
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+
+                    def _send_smtp() -> None:
+                        with _smtplib.SMTP(host, port, timeout=10) as smtp:
+                            smtp.ehlo()
+                            smtp.starttls()
+                            if user and password:
+                                smtp.login(user, password)
+                            smtp.sendmail(from_addr, recipients, msg.as_string())
+
+                    await loop.run_in_executor(None, _send_smtp)
+
+            elif ch.type == "webhook":
+                url = cfg.get("url", "")
+                if url:
+                    headers = {"Content-Type": "application/json"}
+                    secret_name = cfg.get("secret_header_name", "")
+                    secret = cfg.get("secret_header_value", "")
+                    if secret_name and secret:
+                        headers[secret_name] = secret
+                    payload = {
+                        "event_type": "alert.assigned",
+                        "alert_id": alert.id,
+                        "severity": alert.severity,
+                        "model_id": alert.model_id,
+                        "model_name": model_name,
+                        "team": team,
+                        "model_url": model_url,
+                        "metric_name": alert.metric_name,
+                        "metric_value": alert.metric_value,
+                        "threshold": alert.threshold,
+                        "assignee_display_name": assignee_display_name,
+                        "assignee_email": assignee_email,
+                    }
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        await client.post(url, json=payload, headers=headers)
+        except Exception:
+            pass

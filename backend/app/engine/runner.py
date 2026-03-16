@@ -280,6 +280,23 @@ async def run_monitoring(model_id: str) -> str:
                 avg_missing = sum(qr["missing_rate"] for qr in quality_results) / len(quality_results)
                 m.dq_score = round(max(0.0, 1.0 - avg_missing), 4)
 
+            # ── Auto-resolve cleared alerts ───────────────────────────────────
+            current_metrics: dict[tuple[str, str | None], float] = {}
+            for dr in drift_results:
+                current_metrics[("psi", dr["feature_name"])]          = dr["psi"]
+                current_metrics[("ks_stat", dr["feature_name"])]       = dr["ks_stat"]
+                current_metrics[("jsd", dr["feature_name"])]           = dr["jsd"]
+                current_metrics[("wasserstein", dr["feature_name"])]   = dr["wasserstein"]
+            for qr in quality_results:
+                current_metrics[("missing_rate", qr["feature_name"])]  = qr["missing_rate"]
+                current_metrics[("outlier_rate", qr["feature_name"])]  = qr["outlier_rate"]
+            for metric_name, val in perf_data.items():
+                if val is not None:
+                    current_metrics[(metric_name, None)] = val
+            if pred_psi is not None:
+                current_metrics[("prediction_psi", None)] = pred_psi
+            await _auto_resolve_cleared_alerts(db, model_id, current_metrics)
+
             # ── Alerts ───────────────────────────────────────────────────────
             new_alerts = await _evaluate_alerts(
                 db, m, run_id, drift_results, quality_results, perf_data, date_label
@@ -313,6 +330,32 @@ async def run_monitoring(model_id: str) -> str:
             await dispatch_alert_notifications(db, new_alerts)
 
         return run_id
+
+
+async def _auto_resolve_cleared_alerts(
+    db: AsyncSession,
+    model_id: str,
+    current_metrics: dict[tuple[str, str | None], float],
+) -> None:
+    """Resolve open/acknowledged alerts whose metric is now below threshold."""
+    result = await db.execute(
+        select(Alert).where(
+            Alert.model_id == model_id,
+            Alert.status.in_(["open", "acknowledged"]),
+        )
+    )
+    now = datetime.utcnow()
+    for alert in result.scalars().all():
+        key = (alert.metric_name, alert.feature_name)
+        current_value = current_metrics.get(key)
+        if current_value is None:
+            continue
+        # For "lower is better" metrics (MAE, RMSE), cleared when below threshold
+        # For "higher is better" (PSI, missing/outlier), cleared when below threshold
+        # All alert thresholds represent the "bad side" boundary
+        if current_value < alert.threshold:
+            alert.status = "resolved"
+            alert.resolved_at = now
 
 
 async def _maybe_add_alert(

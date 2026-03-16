@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from sqlalchemy import String, Float, Integer, Boolean, DateTime, JSON, ForeignKey, Text
+from sqlalchemy import String, Float, Integer, Boolean, DateTime, JSON, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -167,9 +167,12 @@ class Alert(Base):
     notified_channels: Mapped[List] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     assigned_to: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    assigned_to_user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
 
     model: Mapped["Model"] = relationship(back_populates="alerts")
+    assigned_user: Mapped[Optional["User"]] = relationship("User", foreign_keys=[assigned_to_user_id])
 
 
 class NotificationChannel(Base):
@@ -211,3 +214,53 @@ class StorageConnection(Base):
     last_test_ok: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+# ─── User / Team management ───────────────────────────────────────────────────
+
+class Team(Base):
+    __tablename__ = "teams"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    slug: Mapped[str] = mapped_column(String(200), unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    external_source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    memberships: Mapped[List["TeamMembership"]] = relationship(
+        back_populates="team", cascade="all, delete-orphan"
+    )
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(200), unique=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    external_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    external_source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    memberships: Mapped[List["TeamMembership"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class TeamMembership(Base):
+    __tablename__ = "team_memberships"
+    __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_user"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("teams.id"))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
+    role: Mapped[str] = mapped_column(String(20))  # can_review | can_edit | can_manage | can_admin
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    team: Mapped["Team"] = relationship(back_populates="memberships")
+    user: Mapped["User"] = relationship(back_populates="memberships")
