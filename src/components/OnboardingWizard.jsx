@@ -552,7 +552,9 @@ function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingC
 
 /* ── wizard ── */
 
-export default function OnboardingWizard({ onClose }) {
+export default function OnboardingWizard({ onClose, teams: teamsProp = [] }) {
+  // Use live API teams when available, fall back to the hardcoded list for dev/offline
+  const teamOptions = (teamsProp.length ? teamsProp.map((t) => ({ value: t.name, label: t.name })) : TEAMS.map((t) => ({ value: t, label: t })))
   const [step, setStep] = useState(1)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -560,6 +562,8 @@ export default function OnboardingWizard({ onClose }) {
   const [prodFile, setProdFile] = useState(null)
   const [connections, setConnections] = useState([])
   const [loadingColumns, setLoadingColumns] = useState(false)
+  const [teamMembers, setTeamMembers] = useState([])
+  const [loadingMembers, setLoadingMembers] = useState(false)
   const [form, setForm] = useState({
     name: '', version: '1.0.0', type: 'classification', owner: '', team: '',
     description: '', refSource: 'upload', refPath: '', refConnId: '', prodSource: 'upload', prodPath: '', prodConnId: '',
@@ -575,6 +579,17 @@ export default function OnboardingWizard({ onClose }) {
   useEffect(() => {
     api.listConnections().then(setConnections).catch(() => [])
   }, [])
+
+  // When team changes, fetch its members and reset owner
+  useEffect(() => {
+    const selectedTeam = teamsProp.find((t) => t.name === form.team)
+    if (!selectedTeam) { setTeamMembers([]); return }
+    setLoadingMembers(true)
+    api.getTeamWithMembers(selectedTeam.id)
+      .then((t) => setTeamMembers(t.members ?? []))
+      .catch(() => setTeamMembers([]))
+      .finally(() => setLoadingMembers(false))
+  }, [form.team])
 
   const applyDiscoveredColumns = (cols) => {
     if (!cols.length) return
@@ -733,10 +748,45 @@ export default function OnboardingWizard({ onClose }) {
                 </Field>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <Field label="Owner"><Input value={form.owner} onChange={(v) => u('owner', v)} placeholder="alice.chen" /></Field>
                 <Field label="Team">
-                  <Select value={form.team} onChange={(v) => u('team', v)} style={{ width: '100%' }}
-                    options={[{ value: '', label: 'Select team' }, ...TEAMS.map((t) => ({ value: t, label: t }))]} />
+                  <Select value={form.team} onChange={(v) => { u('team', v); u('owner', '') }} style={{ width: '100%' }}
+                    options={[{ value: '', label: 'Select team…' }, ...teamOptions]} />
+                </Field>
+                <Field label="Owner">
+                  {teamsProp.length > 0 ? (
+                    <>
+                      <select
+                        value={form.owner}
+                        onChange={(e) => u('owner', e.target.value)}
+                        disabled={!form.team || loadingMembers}
+                        style={{
+                          width: '100%', padding: '7px 28px 7px 10px',
+                          background: theme.bgInput,
+                          border: `1px solid ${theme.border}`, borderRadius: 8,
+                          color: form.owner ? theme.text : theme.textDim,
+                          fontSize: 12, outline: 'none', fontFamily: 'inherit',
+                          opacity: (!form.team || loadingMembers) ? 0.5 : 1,
+                          cursor: (!form.team || loadingMembers) ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        <option value="">
+                          {loadingMembers ? 'Loading members…' : form.team ? (teamMembers.length ? 'Select owner…' : 'No members in team') : 'Select a team first'}
+                        </option>
+                        {teamMembers.map((m) => (
+                          <option key={m.user_id} value={m.user.display_name}>
+                            {m.user.display_name} — {m.user.email}
+                          </option>
+                        ))}
+                      </select>
+                      {form.team && !loadingMembers && teamMembers.length === 0 && (
+                        <div style={{ fontSize: 11, color: theme.textDim, marginTop: 4 }}>
+                          Add members to this team in <strong>Settings → Users & Teams</strong>.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <Input value={form.owner} onChange={(v) => u('owner', v)} placeholder="alice.chen" />
+                  )}
                 </Field>
               </div>
               <Field label="Description"><Input value={form.description} onChange={(v) => u('description', v)} placeholder="Production model for..." /></Field>
@@ -846,18 +896,25 @@ export default function OnboardingWizard({ onClose }) {
             {error}
           </div>
         )}
-        <div style={{ padding: '12px 24px 20px', display: 'flex', justifyContent: 'space-between' }}>
+        <div style={{ padding: '12px 24px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Button onClick={() => (step > 1 ? setStep(step - 1) : onClose())} variant="ghost" disabled={submitting}>
             {step > 1 ? 'Back' : 'Cancel'}
           </Button>
-          <Button
-            variant="primary"
-            onClick={() => (step < 7 ? setStep(step + 1) : handleCreate())}
-            icon={step === 7 ? 'check' : 'chevron-right'}
-            disabled={submitting}
-          >
-            {step === 7 ? (submitting ? 'Creating…' : 'Create Model') : 'Next'}
-          </Button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {step === 1 && (!form.team || !form.owner) && (
+              <span style={{ fontSize: 11, color: theme.textDim }}>
+                {!form.team ? 'Select a team to continue' : 'Select an owner to continue'}
+              </span>
+            )}
+            <Button
+              variant="primary"
+              onClick={() => (step < 7 ? setStep(step + 1) : handleCreate())}
+              icon={step === 7 ? 'check' : 'chevron-right'}
+              disabled={submitting || (step === 1 && (!form.team || !form.owner))}
+            >
+              {step === 7 ? (submitting ? 'Creating…' : 'Create Model') : 'Next'}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

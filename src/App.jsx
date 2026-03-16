@@ -2,7 +2,7 @@
    App — Root component
    ═══════════════════════════════════════════ */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   BrowserRouter,
   Routes,
@@ -18,9 +18,12 @@ import ModelDetail from './components/ModelDetail.jsx'
 import AlertsView from './components/AlertsView.jsx'
 import SettingsView from './components/SettingsView.jsx'
 import OnboardingWizard from './components/OnboardingWizard.jsx'
+import TeamHealthView from './components/TeamHealthView.jsx'
 import { Toaster } from 'sonner'
 import { api } from './api.js'
 import { theme } from './utils/theme.js'
+
+const CURRENT_USER_KEY = 'ml_monitor_current_user'
 
 /* ── ModelDetailRoute: fetches model by URL param ── */
 function ModelDetailRoute({ onRefresh }) {
@@ -59,18 +62,130 @@ function ModelDetailRoute({ onRefresh }) {
   )
 }
 
+/* ── Identity picker (header dropdown) ── */
+function IdentityPicker({ currentUser, users, onSelect }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const activeUsers = users.filter(u => u.is_active)
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 12px', borderRadius: 8,
+          border: `1px solid ${currentUser ? theme.accent + '40' : theme.border}`,
+          background: currentUser ? theme.accent + '12' : theme.bgCard,
+          color: currentUser ? theme.accent : theme.textMuted,
+          cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 500,
+          transition: 'all 0.15s',
+        }}
+      >
+        <Icon name="user" size={12} />
+        {currentUser ? currentUser.display_name : 'Set identity'}
+        <Icon name="chevron-down" size={11} style={{ opacity: 0.6 }} />
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', right: 0, top: '100%', marginTop: 6,
+          background: theme.bgCard, border: `1px solid ${theme.border}`,
+          borderRadius: 10, minWidth: 220, zIndex: 200,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+          padding: '6px 0',
+        }}>
+          <div style={{ padding: '4px 12px 8px', fontSize: 10, color: theme.textDim, textTransform: 'uppercase', letterSpacing: 0.7, fontWeight: 600 }}>
+            You are…
+          </div>
+          {activeUsers.length === 0 && (
+            <div style={{ padding: '8px 12px', fontSize: 12, color: theme.textDim }}>
+              No users — create one in Settings
+            </div>
+          )}
+          {activeUsers.map(u => (
+            <button
+              key={u.id}
+              onClick={() => { onSelect(u); setOpen(false) }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                width: '100%', padding: '8px 12px', border: 'none', borderRadius: 0,
+                background: currentUser?.id === u.id ? theme.accent + '15' : 'transparent',
+                color: currentUser?.id === u.id ? theme.accent : theme.text,
+                cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, textAlign: 'left',
+                transition: 'background 0.1s',
+              }}
+              onMouseEnter={e => { if (currentUser?.id !== u.id) e.currentTarget.style.background = theme.bgCardHover }}
+              onMouseLeave={e => { if (currentUser?.id !== u.id) e.currentTarget.style.background = 'transparent' }}
+            >
+              <div style={{
+                width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
+                background: theme.accent + '25', color: theme.accent,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, fontWeight: 700,
+              }}>
+                {u.display_name[0].toUpperCase()}
+              </div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 12 }}>{u.display_name}</div>
+                <div style={{ fontSize: 10, color: theme.textDim }}>{u.email}</div>
+              </div>
+              {currentUser?.id === u.id && <Icon name="check" size={12} style={{ marginLeft: 'auto', color: theme.accent }} />}
+            </button>
+          ))}
+          {currentUser && (
+            <>
+              <div style={{ borderTop: `1px solid ${theme.border}`, margin: '6px 0' }} />
+              <button
+                onClick={() => { onSelect(null); setOpen(false) }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  width: '100%', padding: '7px 12px', border: 'none',
+                  background: 'transparent', color: theme.textDim,
+                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
+                }}
+              >
+                <Icon name="log-out" size={12} />
+                Clear identity
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ── AppShell: layout + data fetching ── */
 function AppShell() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  const [showWizard, setShowWizard] = useState(false)
-  const [now, setNow]               = useState(new Date())
-  const [models, setModels]         = useState([])
-  const [demoModels, setDemoModels] = useState([])
-  const [overviewTab, setOverviewTab] = useState('models')
-  const [alerts, setAlerts]         = useState([])
-  const [loading, setLoading]       = useState(true)
+  const [showWizard, setShowWizard]     = useState(false)
+  const [now, setNow]                   = useState(new Date())
+  const [models, setModels]             = useState([])
+  const [demoModels, setDemoModels]     = useState([])
+  const [overviewTab, setOverviewTab]   = useState('models')
+  const [alerts, setAlerts]             = useState([])
+  const [teams, setTeams]               = useState([])
+  const [users, setUsers]               = useState([])
+  const [loading, setLoading]           = useState(true)
+  const [currentUser, setCurrentUser]   = useState(() => {
+    try { return JSON.parse(localStorage.getItem(CURRENT_USER_KEY)) } catch { return null }
+  })
+
+  const handleSetCurrentUser = useCallback((user) => {
+    setCurrentUser(user)
+    if (user) localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user))
+    else localStorage.removeItem(CURRENT_USER_KEY)
+  }, [])
 
   const fetchData = useCallback(() => {
     setLoading(true)
@@ -78,10 +193,14 @@ function AppShell() {
       api.listModels({ is_demo: false }).catch(() => ({ items: [] })),
       api.listModels({ is_demo: true }).catch(() => ({ items: [] })),
       api.listAlerts().catch(() => ({ items: [] })),
-    ]).then(([modelsRes, demoRes, alertsRes]) => {
+      api.listTeams().catch(() => []),
+      api.listUsers().catch(() => ({ items: [] })),
+    ]).then(([modelsRes, demoRes, alertsRes, teamsRes, usersRes]) => {
       setModels(modelsRes.items ?? [])
       setDemoModels(demoRes.items ?? [])
       setAlerts(alertsRes.items ?? [])
+      setTeams(teamsRes ?? [])
+      setUsers(usersRes.items ?? usersRes ?? [])
     }).finally(() => setLoading(false))
   }, [])
 
@@ -100,6 +219,7 @@ function AppShell() {
   const NAV = [
     { path: '/',         match: (p) => p === '/' || p.startsWith('/models'),  label: 'Models',   icon: 'grid' },
     { path: '/alerts',   match: (p) => p === '/alerts',                        label: 'Alerts',   icon: 'bell' },
+    { path: '/teams',    match: (p) => p.startsWith('/teams'),                 label: 'Teams',    icon: 'users' },
     { path: '/settings', match: (p) => p.startsWith('/settings'),              label: 'Settings', icon: 'settings' },
   ]
 
@@ -188,9 +308,16 @@ function AppShell() {
         <div style={{ flex: 1 }} />
 
         {/* Clock */}
-        <span style={{ fontSize: 11, color: theme.textDim, fontFamily: 'var(--font-mono)' }}>
+        <span style={{ fontSize: 11, color: theme.textDim, fontFamily: 'var(--font-mono)', marginRight: 8 }}>
           {now.toISOString().slice(0, 16).replace('T', ' ')} UTC
         </span>
+
+        {/* Identity picker */}
+        <IdentityPicker
+          currentUser={currentUser}
+          users={users}
+          onSelect={handleSetCurrentUser}
+        />
       </header>
 
       {/* ═══════════ Content ═══════════ */}
@@ -202,6 +329,7 @@ function AppShell() {
               <ModelOverview
                 models={models}
                 demoModels={demoModels}
+                teams={teams}
                 overviewTab={overviewTab}
                 onTabChange={setOverviewTab}
                 loading={loading}
@@ -218,8 +346,22 @@ function AppShell() {
               <AlertsView
                 alerts={alerts}
                 models={[...models, ...demoModels]}
+                teams={teams}
+                currentUser={currentUser}
                 onSelectModel={(m) => navigate('/models/' + m.id)}
                 onRefresh={fetchData}
+              />
+            }
+          />
+          <Route
+            path="/teams"
+            element={
+              <TeamHealthView
+                models={models}
+                alerts={alerts}
+                teams={teams}
+                loading={loading}
+                onSelectModel={(m) => navigate('/models/' + m.id)}
               />
             }
           />
@@ -232,6 +374,7 @@ function AppShell() {
       {/* ═══════════ Wizard overlay ═══════════ */}
       {showWizard && (
         <OnboardingWizard
+          teams={teams}
           onClose={(opts) => {
             setShowWizard(false)
             if (opts?.refresh) fetchData()

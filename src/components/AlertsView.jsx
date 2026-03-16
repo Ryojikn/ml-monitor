@@ -9,12 +9,8 @@ import { theme, severityColor } from '../utils/theme.js'
 import { fmt } from '../utils/helpers.js'
 import { SEVERITIES } from '../utils/constants.js'
 import { api } from '../api.js'
-
-const NEXT_ACTION = {
-  open:         { label: 'Acknowledge', next: 'acknowledged' },
-  acknowledged: { label: 'Resolve',     next: 'resolved' },
-  resolved:     { label: 'Reopen',      next: 'open' },
-}
+import AcknowledgeModal from './AcknowledgeModal.jsx'
+import AssignedToMeView from './AssignedToMeView.jsx'
 
 const ACTION_COLOR = {
   open:         '#f59e0b',
@@ -37,16 +33,44 @@ function alertCategory(metricName) {
   return { label: 'Alert', color: theme.textDim }
 }
 
-export default function AlertsView({ alerts, models, onSelectModel, onRefresh }) {
+/* Format duration between two ISO timestamps */
+function fmtDuration(from, to) {
+  if (!from) return null
+  const ms = new Date(to ?? Date.now()) - new Date(from)
+  if (ms < 0) return null
+  const mins  = Math.floor(ms / 60_000)
+  const hours = Math.floor(mins / 60)
+  const days  = Math.floor(hours / 24)
+  if (days > 0)  return `${days}d ${hours % 24}h`
+  if (hours > 0) return `${hours}h ${mins % 60}m`
+  return `${mins}m`
+}
+
+function TimingBadge({ label, value, color }) {
+  if (!value) return null
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 3,
+      fontSize: 10, padding: '1px 6px', borderRadius: 8,
+      background: color + '15', color,
+      fontFamily: 'var(--font-mono)', fontWeight: 600,
+    }}>
+      {label} {value}
+    </span>
+  )
+}
+
+export default function AlertsView({ alerts, models, teams = [], currentUser, onSelectModel, onRefresh }) {
   const [tab,          setTab]          = useState('models')
   const [sevFilter,    setSevFilter]    = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [teamFilter,   setTeamFilter]   = useState('all')
   const [modelFilter,  setModelFilter]  = useState('all')
-  const [editingAssignee, setEditingAssignee] = useState(null)
-  const [saving, setSaving] = useState(null)
+  const [saving,       setSaving]       = useState(null)
+  const [ackModal,     setAckModal]     = useState(null) // alert object
 
   const isDemo = tab === 'demo'
+  const isMine = tab === 'mine'
 
   // Split alerts by demo vs real
   const demoModelIds  = useMemo(() => new Set(models.filter((m) => m.is_demo).map((m) => m.id)), [models])
@@ -55,13 +79,14 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
   // Tab counts (open alerts only, for the badge)
   const realOpenCount = useMemo(() => alerts.filter((a) => !demoModelIds.has(a.model_id) && a.status === 'open').length, [alerts, demoModelIds])
   const demoOpenCount = useMemo(() => alerts.filter((a) =>  demoModelIds.has(a.model_id) && a.status === 'open').length, [alerts, demoModelIds])
+  const mineCount     = useMemo(() => currentUser ? alerts.filter((a) => a.assigned_to_user_id === currentUser.id && a.status !== 'resolved').length : 0, [alerts, currentUser])
 
   // Build team + model option lists scoped to the active tab's models
   const tabModels = useMemo(() => models.filter((m) => isDemo ? m.is_demo : !m.is_demo), [models, isDemo])
 
   const teamOptions = useMemo(() => {
-    const teams = [...new Set(tabModels.map((m) => m.team).filter(Boolean))].sort()
-    return [{ value: 'all', label: 'All Teams' }, ...teams.map((t) => ({ value: t, label: t }))]
+    const ts = [...new Set(tabModels.map((m) => m.team).filter(Boolean))].sort()
+    return [{ value: 'all', label: 'All Teams' }, ...ts.map((t) => ({ value: t, label: t }))]
   }, [tabModels])
 
   const modelOptions = useMemo(() => {
@@ -84,21 +109,10 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
     resolved: tabAlerts.filter((a) => a.status === 'resolved').length,
   }
 
-  async function handleStatusChange(alertId, nextStatus) {
+  async function handleReopen(alertId) {
     setSaving(alertId)
     try {
-      await api.updateAlert(alertId, { status: nextStatus })
-      onRefresh?.()
-    } finally {
-      setSaving(null)
-    }
-  }
-
-  async function handleAssigneeSave(alertId, value) {
-    setSaving(alertId)
-    try {
-      await api.updateAlert(alertId, { assigned_to: value || null })
-      setEditingAssignee(null)
+      await api.updateAlert(alertId, { status: 'open' })
       onRefresh?.()
     } finally {
       setSaving(null)
@@ -111,7 +125,6 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
     setModelFilter('all')
   }
 
-  // Reset model filter when team filter changes
   function handleTeamChange(t) {
     setTeamFilter(t)
     setModelFilter('all')
@@ -120,37 +133,57 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
   return (
     <div>
       {/* Tab switcher */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, flexWrap: 'wrap' }}>
         {[
-          { key: 'models', label: 'Models',      icon: 'grid', count: realOpenCount },
-          { key: 'demo',   label: 'Demo Gallery', icon: 'play', count: demoOpenCount },
-        ].map((t) => (
-          <button
-            key={t.key}
-            onClick={() => handleTabChange(t.key)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '7px 16px', borderRadius: 8,
-              border: tab === t.key ? `1px solid ${theme.accent}40` : `1px solid ${theme.border}`,
-              cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
-              background: tab === t.key ? theme.accent + '14' : theme.bgCard,
-              color: tab === t.key ? theme.accent : theme.textMuted,
-              transition: 'all 0.15s',
-            }}
-          >
-            <Icon name={t.icon} size={13} />
-            {t.label}
-            <span style={{
-              fontSize: 11, fontWeight: 700,
-              background: tab === t.key ? theme.accent + '25' : theme.bgInput,
-              color: tab === t.key ? theme.accent : theme.textDim,
-              padding: '1px 7px', borderRadius: 10,
-            }}>
-              {t.count}
-            </span>
-          </button>
-        ))}
+          { key: 'models', label: 'Models',         icon: 'grid', count: realOpenCount },
+          { key: 'demo',   label: 'Demo Gallery',   icon: 'play', count: demoOpenCount },
+          { key: 'mine',   label: 'Assigned to me', icon: 'user', count: mineCount },
+        ].map((t) => {
+          const active = tab === t.key
+          const isMineTab = t.key === 'mine'
+          const badgeColor = isMineTab && t.count > 0 ? theme.red : (active ? theme.accent : theme.textDim)
+          return (
+            <button
+              key={t.key}
+              onClick={() => handleTabChange(t.key)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '7px 16px', borderRadius: 8,
+                border: active ? `1px solid ${theme.accent}40` : `1px solid ${theme.border}`,
+                cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
+                background: active ? theme.accent + '14' : theme.bgCard,
+                color: active ? theme.accent : theme.textMuted,
+                transition: 'all 0.15s',
+              }}
+            >
+              <Icon name={t.icon} size={13} />
+              {t.label}
+              <span style={{
+                fontSize: 11, fontWeight: 700,
+                background: active ? theme.accent + '25' : isMineTab && t.count > 0 ? theme.red + '20' : theme.bgInput,
+                color: active ? theme.accent : badgeColor,
+                padding: '1px 7px', borderRadius: 10,
+              }}>
+                {t.count}
+              </span>
+            </button>
+          )
+        })}
       </div>
+
+      {/* Assigned to me view */}
+      {isMine && (
+        <AssignedToMeView
+          alerts={alerts}
+          models={models}
+          teams={teams}
+          currentUser={currentUser}
+          onSelectModel={onSelectModel}
+          onRefresh={onRefresh}
+        />
+      )}
+
+      {isMine ? null : (<>
 
       {/* Summary */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
@@ -172,7 +205,7 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-              {['Severity', 'Model', 'Team', 'Reason', 'Metric', 'Value / Thr', 'Status', 'Assigned To', 'Actions'].map((h) => (
+              {['Severity', 'Model', 'Team', 'Reason', 'Metric', 'Value / Thr', 'Assigned To', 'Timing', 'Status', 'Actions'].map((h) => (
                 <th key={h} style={{ padding: '8px 10px', textAlign: 'left', color: theme.textDim, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -180,10 +213,10 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
           <tbody>
             {filtered.map((a) => {
               const mdl = models.find((m) => m.id === a.model_id)
-              const action = NEXT_ACTION[a.status]
-              const isEditing = editingAssignee?.id === a.id
               const isSaving = saving === a.id
               const cat = alertCategory(a.metric_name)
+              const tta = fmtDuration(a.created_at, a.acknowledged_at)
+              const ttr = fmtDuration(a.created_at, a.resolved_at)
 
               return (
                 <tr key={a.id} style={{ borderBottom: `1px solid ${theme.border}18` }}>
@@ -211,7 +244,7 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
                     {mdl?.team || '—'}
                   </td>
 
-                  {/* Reason — category tag + feature name */}
+                  {/* Reason */}
                   <td style={{ padding: '10px 10px', whiteSpace: 'nowrap' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{
@@ -241,6 +274,36 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: theme.textDim }}>{fmt(a.threshold)}</span>
                   </td>
 
+                  {/* Assigned To */}
+                  <td style={{ padding: '10px 10px', whiteSpace: 'nowrap' }}>
+                    {a.assigned_user ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{
+                          width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                          background: theme.purple + '25', color: theme.purple,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 10, fontWeight: 700,
+                        }}>
+                          {a.assigned_user.display_name[0].toUpperCase()}
+                        </div>
+                        <span style={{ fontSize: 12, color: theme.text }}>{a.assigned_user.display_name}</span>
+                      </div>
+                    ) : (
+                      <span style={{ color: theme.textDim, fontSize: 11 }}>Unassigned</span>
+                    )}
+                  </td>
+
+                  {/* Timing */}
+                  <td style={{ padding: '10px 10px', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {tta && <TimingBadge label="TTA" value={tta} color={theme.yellow} />}
+                      {ttr && <TimingBadge label="TTR" value={ttr} color={theme.green} />}
+                      {!tta && !ttr && (
+                        <TimingBadge label="Age" value={fmtDuration(a.created_at)} color={theme.textDim} />
+                      )}
+                    </div>
+                  </td>
+
                   {/* Status */}
                   <td style={{ padding: '10px 10px' }}>
                     <Badge
@@ -251,67 +314,59 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
                     </Badge>
                   </td>
 
-                  {/* Assignee inline edit */}
-                  <td style={{ padding: '10px 10px' }}>
-                    {isEditing ? (
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <input
-                          autoFocus
-                          value={editingAssignee.value}
-                          onChange={(e) => setEditingAssignee({ id: a.id, value: e.target.value })}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleAssigneeSave(a.id, editingAssignee.value)
-                            if (e.key === 'Escape') setEditingAssignee(null)
-                          }}
-                          style={{
-                            background: theme.bgInput, border: `1px solid ${theme.border}`,
-                            borderRadius: 4, padding: '2px 6px', fontSize: 11,
-                            color: theme.text, fontFamily: 'inherit', width: 90,
-                          }}
-                        />
+                  {/* Actions */}
+                  <td style={{ padding: '10px 10px', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {/* Open → Acknowledge (opens modal) */}
+                      {a.status === 'open' && (
                         <button
-                          onClick={() => handleAssigneeSave(a.id, editingAssignee.value)}
+                          onClick={() => setAckModal(a)}
                           disabled={isSaving}
                           style={{
-                            background: theme.accent + '20', border: `1px solid ${theme.accent}40`,
-                            borderRadius: 4, padding: '2px 6px', fontSize: 10,
-                            color: theme.accent, cursor: 'pointer', fontFamily: 'inherit',
+                            background: ACTION_COLOR.open + '18',
+                            border: `1px solid ${ACTION_COLOR.open}40`,
+                            borderRadius: 5, padding: '3px 8px',
+                            fontSize: 10, fontWeight: 600, fontFamily: 'inherit',
+                            color: ACTION_COLOR.open,
+                            cursor: 'pointer', whiteSpace: 'nowrap',
                           }}
                         >
-                          Save
+                          Acknowledge
                         </button>
-                      </div>
-                    ) : (
-                      <span
-                        onClick={() => setEditingAssignee({ id: a.id, value: a.assigned_to || '' })}
-                        style={{ cursor: 'pointer', color: a.assigned_to ? theme.text : theme.textDim, borderBottom: `1px dashed ${theme.border}` }}
-                        title="Click to assign"
-                      >
-                        {a.assigned_to || '—'}
-                      </span>
-                    )}
-                  </td>
-
-                  {/* Action */}
-                  <td style={{ padding: '10px 10px' }}>
-                    {action && (
-                      <button
-                        onClick={() => handleStatusChange(a.id, action.next)}
-                        disabled={isSaving}
-                        style={{
-                          background: ACTION_COLOR[a.status] + '18',
-                          border: `1px solid ${ACTION_COLOR[a.status]}40`,
-                          borderRadius: 5, padding: '3px 8px',
-                          fontSize: 10, fontWeight: 600, fontFamily: 'inherit',
-                          color: ACTION_COLOR[a.status],
-                          cursor: isSaving ? 'default' : 'pointer',
-                          opacity: isSaving ? 0.5 : 1,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {action.label}
-                      </button>
-                    )}
+                      )}
+                      {/* Acknowledged → reassign or reopen */}
+                      {a.status === 'acknowledged' && (
+                        <>
+                          <button
+                            onClick={() => setAckModal(a)}
+                            disabled={isSaving}
+                            style={{
+                              background: theme.purple + '18',
+                              border: `1px solid ${theme.purple}40`,
+                              borderRadius: 5, padding: '3px 8px',
+                              fontSize: 10, fontWeight: 600, fontFamily: 'inherit',
+                              color: theme.purple, cursor: 'pointer', whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Reassign
+                          </button>
+                          <button
+                            onClick={() => handleReopen(a.id)}
+                            disabled={isSaving}
+                            style={{
+                              background: theme.textDim + '15',
+                              border: `1px solid ${theme.border}`,
+                              borderRadius: 5, padding: '3px 8px',
+                              fontSize: 10, fontWeight: 600, fontFamily: 'inherit',
+                              color: theme.textDim, cursor: 'pointer', whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Reopen
+                          </button>
+                        </>
+                      )}
+                      {/* Resolved — no actions */}
+                    </div>
                   </td>
 
                 </tr>
@@ -319,12 +374,26 @@ export default function AlertsView({ alerts, models, onSelectModel, onRefresh })
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ padding: 30, textAlign: 'center', color: theme.textDim }}>No alerts match your filters</td>
+                <td colSpan={10} style={{ padding: 30, textAlign: 'center', color: theme.textDim }}>No alerts match your filters</td>
               </tr>
             )}
           </tbody>
         </table>
       </Card>
+
+      </>)}
+
+      {/* Acknowledge / Reassign modal */}
+      {ackModal && (
+        <AcknowledgeModal
+          alert={ackModal}
+          models={models}
+          teams={teams}
+          currentUser={currentUser}
+          onConfirm={() => { onRefresh?.() }}
+          onClose={() => setAckModal(null)}
+        />
+      )}
     </div>
   )
 }

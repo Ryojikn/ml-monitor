@@ -153,6 +153,46 @@ export const api = {
   testNotification: (id) =>
     request(`/notifications/${id}/test`, { method: 'POST' }),
 
+  // ── Teams ─────────────────────────────────
+  listTeams: () => request('/teams'),
+
+  createTeam: (body) =>
+    request('/teams', { method: 'POST', body: JSON.stringify(body) }),
+
+  updateTeam: (id, body) =>
+    request(`/teams/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  deleteTeam: (id) =>
+    request(`/teams/${id}`, { method: 'DELETE' }),
+
+  getTeamWithMembers: (id) => request(`/teams/${id}`),
+
+  listTeamMembers: (id) => request(`/teams/${id}/members`),
+
+  addTeamMember: (id, body) =>
+    request(`/teams/${id}/members`, { method: 'POST', body: JSON.stringify(body) }),
+
+  updateTeamMember: (id, userId, body) =>
+    request(`/teams/${id}/members/${userId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  removeTeamMember: (id, userId) =>
+    request(`/teams/${id}/members/${userId}`, { method: 'DELETE' }),
+
+  syncTeam: (id, body) =>
+    request(`/teams/${id}/sync`, { method: 'POST', body: JSON.stringify(body) }),
+
+  // ── Users ─────────────────────────────────
+  listUsers: () => request('/users'),
+
+  createUser: (body) =>
+    request('/users', { method: 'POST', body: JSON.stringify(body) }),
+
+  updateUser: (id, body) =>
+    request(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  deactivateUser: (id) =>
+    request(`/users/${id}`, { method: 'DELETE' }),
+
   // ── Health ────────────────────────────────
   health: () => request('/health'),
 }

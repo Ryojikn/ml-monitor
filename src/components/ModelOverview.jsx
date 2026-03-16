@@ -6,9 +6,9 @@ import { useState, useMemo } from 'react'
 import Icon from './Icon.jsx'
 import { MetricCard, SearchInput, Select, Badge, Sparkline, StatusDot, Button } from './ui.jsx'
 import { theme, driftColor, statusColor } from '../utils/theme.js'
-import { MODEL_TYPES, STATUSES, TEAMS } from '../utils/constants.js'
+import { MODEL_TYPES, STATUSES } from '../utils/constants.js'
 
-export default function ModelOverview({ models, demoModels = [], overviewTab = 'models', onTabChange, onSelect, onNewModel, loading }) {
+export default function ModelOverview({ models, demoModels = [], teams = [], overviewTab = 'models', onTabChange, onSelect, onNewModel, loading }) {
   const [search, setSearch]           = useState('')
   const [typeFilter, setTypeFilter]   = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -17,16 +17,23 @@ export default function ModelOverview({ models, demoModels = [], overviewTab = '
   const isDemo = overviewTab === 'demo'
   const activeList = isDemo ? demoModels : models
 
+  const teamOptions = useMemo(() => {
+    const list = teams.length
+      ? teams.map((t) => ({ value: t.name, label: t.name }))
+      : [...new Set(activeList.map((m) => m.team).filter(Boolean))].map((t) => ({ value: t, label: t }))
+    return [{ value: 'all', label: 'All Teams' }, ...list]
+  }, [teams, activeList])
+
   const filtered = useMemo(
     () =>
       activeList.filter((m) => {
-        if (search && !m.name.toLowerCase().includes(search.toLowerCase()) && !m.team.toLowerCase().includes(search.toLowerCase())) return false
+        if (search && !m.name.toLowerCase().includes(search.toLowerCase()) && !m.team.toLowerCase().includes(search.toLowerCase()) && !(m.owner ?? '').toLowerCase().includes(search.toLowerCase())) return false
         if (typeFilter   !== 'all' && m.type   !== typeFilter) return false
         if (statusFilter !== 'all' && m.status !== statusFilter) return false
         if (teamFilter   !== 'all' && m.team   !== teamFilter) return false
         return true
       }),
-    [activeList, isDemo, search, typeFilter, statusFilter, teamFilter],
+    [activeList, search, typeFilter, statusFilter, teamFilter],
   )
 
   const counts = useMemo(
@@ -42,36 +49,39 @@ export default function ModelOverview({ models, demoModels = [], overviewTab = '
   return (
     <div>
       {/* ── Tab switcher ── */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, flexWrap: 'wrap' }}>
         {[
-          { key: 'models', label: 'Models',      icon: 'grid',  count: models.length },
-          { key: 'demo',   label: 'Demo Gallery', icon: 'play',  count: demoModels.length },
-        ].map((t) => (
-          <button
-            key={t.key}
-            onClick={() => onTabChange?.(t.key)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '7px 16px', borderRadius: 8,
-              border: overviewTab === t.key ? `1px solid ${theme.accent}40` : `1px solid ${theme.border}`,
-              cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
-              background: overviewTab === t.key ? theme.accent + '14' : theme.bgCard,
-              color: overviewTab === t.key ? theme.accent : theme.textMuted,
-              transition: 'all 0.15s',
-            }}
-          >
-            <Icon name={t.icon} size={13} />
-            {t.label}
-            <span style={{
-              fontSize: 11, fontWeight: 700,
-              background: overviewTab === t.key ? theme.accent + '25' : theme.bgInput,
-              color: overviewTab === t.key ? theme.accent : theme.textDim,
-              padding: '1px 7px', borderRadius: 10,
-            }}>
-              {t.count}
-            </span>
-          </button>
-        ))}
+          { key: 'models', label: 'Models',       icon: 'grid', count: models.length },
+          { key: 'demo',   label: 'Demo Gallery', icon: 'play', count: demoModels.length },
+        ].map((t) => {
+          const active = overviewTab === t.key
+          return (
+            <button
+              key={t.key}
+              onClick={() => onTabChange?.(t.key)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '7px 16px', borderRadius: 8,
+                border: active ? `1px solid ${theme.accent}40` : `1px solid ${theme.border}`,
+                cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
+                background: active ? theme.accent + '14' : theme.bgCard,
+                color: active ? theme.accent : theme.textMuted,
+                transition: 'all 0.15s',
+              }}
+            >
+              <Icon name={t.icon} size={13} />
+              {t.label}
+              <span style={{
+                fontSize: 11, fontWeight: 700,
+                background: active ? theme.accent + '25' : theme.bgInput,
+                color: active ? theme.accent : theme.textDim,
+                padding: '1px 7px', borderRadius: 10,
+              }}>
+                {t.count}
+              </span>
+            </button>
+          )
+        })}
       </div>
 
       {/* ── Demo banner ── */}
@@ -97,11 +107,11 @@ export default function ModelOverview({ models, demoModels = [], overviewTab = '
       {/* ── Filters ── */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search models or teams…" />
+          <SearchInput value={search} onChange={setSearch} placeholder="Search models, teams or owners…" />
         </div>
-        <Select value={typeFilter}   onChange={setTypeFilter}   options={[{ value: 'all', label: 'All Types' },   ...MODEL_TYPES.map((t) => ({ value: t, label: t }))]} />
-        <Select value={statusFilter} onChange={setStatusFilter} options={[{ value: 'all', label: 'All Status' },  ...STATUSES.map((s) => ({ value: s, label: s }))]} />
-        <Select value={teamFilter}   onChange={setTeamFilter}   options={[{ value: 'all', label: 'All Teams' },   ...TEAMS.map((t) => ({ value: t, label: t }))]} />
+        <Select value={typeFilter}   onChange={setTypeFilter}   options={[{ value: 'all', label: 'All Types' },  ...MODEL_TYPES.map((t) => ({ value: t, label: t }))]} />
+        <Select value={statusFilter} onChange={setStatusFilter} options={[{ value: 'all', label: 'All Status' }, ...STATUSES.map((s) => ({ value: s, label: s }))]} />
+        <Select value={teamFilter}   onChange={setTeamFilter}   options={teamOptions} />
         <Button variant="primary" icon="plus" onClick={onNewModel}>New Model</Button>
       </div>
 
@@ -111,14 +121,14 @@ export default function ModelOverview({ models, demoModels = [], overviewTab = '
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: isDemo ? '2fr 1fr 1fr 80px 100px 90px 60px' : '2fr 1fr 1fr 1fr 100px 90px 60px',
+            gridTemplateColumns: isDemo ? '2fr 1fr 1fr 1fr 80px 100px 90px 60px' : '2fr 1fr 1fr 1fr 1fr 100px 90px 60px',
             padding: '10px 18px',
             borderBottom: `1px solid ${theme.border}`,
             fontSize: 11, fontWeight: 600, color: theme.textDim,
             textTransform: 'uppercase', letterSpacing: 0.8,
           }}
         >
-          <span>Model</span><span>Team</span><span>Type</span>
+          <span>Model</span><span>Team</span><span>Owner</span><span>Type</span>
           {isDemo ? <span>Demo</span> : <span>Last Run</span>}
           <span>PSI Trend</span><span>Status</span><span />
         </div>
@@ -130,7 +140,7 @@ export default function ModelOverview({ models, demoModels = [], overviewTab = '
             onClick={() => onSelect(m)}
             style={{
               display: 'grid',
-              gridTemplateColumns: isDemo ? '2fr 1fr 1fr 80px 100px 90px 60px' : '2fr 1fr 1fr 1fr 100px 90px 60px',
+              gridTemplateColumns: isDemo ? '2fr 1fr 1fr 1fr 80px 100px 90px 60px' : '2fr 1fr 1fr 1fr 1fr 100px 90px 60px',
               padding: '12px 18px',
               borderBottom: `1px solid ${theme.border}08`,
               alignItems: 'center',
@@ -143,9 +153,10 @@ export default function ModelOverview({ models, demoModels = [], overviewTab = '
           >
             <div>
               <div style={{ fontWeight: 600, color: theme.text }}>{m.name}</div>
-              <div style={{ fontSize: 11, color: theme.textDim }}>{m.owner} · {m.engine}</div>
+              <div style={{ fontSize: 11, color: theme.textDim }}>{m.engine}</div>
             </div>
             <div style={{ color: theme.textMuted }}>{m.team}</div>
+            <div style={{ fontSize: 12, color: theme.textMuted }}>{m.owner || '—'}</div>
             <div><Badge color={theme.purple}>{m.type}</Badge></div>
             {isDemo
               ? <div><Badge color={theme.purple} style={{ opacity: 0.8, fontSize: 10 }}>DEMO</Badge></div>
@@ -166,7 +177,6 @@ export default function ModelOverview({ models, demoModels = [], overviewTab = '
           </div>
         )}
       </div>
-
     </div>
   )
 }
