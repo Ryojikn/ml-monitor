@@ -1,0 +1,1913 @@
+openapi: 3.0.3
+info:
+  title: MLMonitor API
+  version: 1.0.0
+  description: |
+    MLMonitor is a production-grade ML model monitoring platform. This API provides
+    endpoints for model registration, monitoring run management, drift detection,
+    alert lifecycle management, team and user administration, and storage/notification
+    configuration.
+
+    ## Authentication
+
+    API key authentication is supported via the `X-API-Key` header. Keys are created
+    via `POST /api/v1/api-keys` and stored as SHA-256 hashes. The full key is
+    returned only at creation time.
+
+    ## Base URL
+
+    All endpoints are prefixed with `/api/v1`.
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development
+  - url: https://mlmonitor.example.com/api/v1
+    description: Production
+
+tags:
+  - name: health
+    description: Service health
+  - name: models
+    description: ML model registration and configuration
+  - name: runs
+    description: Monitoring run trigger and status
+  - name: drift
+    description: Feature drift metrics and histograms
+  - name: datasets
+    description: Dataset upload and management
+  - name: alerts
+    description: Alert lifecycle and assignment
+  - name: connections
+    description: Storage connection management
+  - name: notifications
+    description: Notification channel management
+  - name: api-keys
+    description: API key management
+  - name: teams
+    description: Team and membership management
+  - name: users
+    description: User management
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: 1.0.0
+
+  /models:
+    get:
+      tags: [models]
+      summary: List models
+      operationId: listModels
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Filter by name (partial match)
+        - name: team
+          in: query
+          schema:
+            type: string
+          description: Filter by exact team name
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [classification, regression]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [healthy, warning, critical, inactive]
+        - name: is_demo
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelListResponse'
+
+    post:
+      tags: [models]
+      summary: Create model
+      operationId: createModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelCreate'
+      responses:
+        '201':
+          description: Model created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelRead'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /models/{model_id}:
+    parameters:
+      - $ref: '#/components/parameters/ModelId'
+
+    get:
+      tags: [models]
+      summary: Get model detail
+      operationId: getModel
+      responses:
+        '200':
+          description: Full model with timelines and results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelDetailRead'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [models]
+      summary: Update model
+      operationId: updateModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelUpdate'
+      responses:
+        '200':
+          description: Updated model
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelRead'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [models]
+      summary: Delete model
+      operationId: deleteModel
+      responses:
+        '204':
+          description: Model deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /models/{model_id}/runs:
+    parameters:
+      - $ref: '#/components/parameters/ModelId'
+
+    post:
+      tags: [runs]
+      summary: Trigger monitoring run
+      operationId: triggerRun
+      responses:
+        '202':
+          description: Run accepted (executing asynchronously)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: running
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    get:
+      tags: [runs]
+      summary: List runs
+      operationId: listRuns
+      responses:
+        '200':
+          description: Last 50 runs, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RunRead'
+
+  /models/{model_id}/runs/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ModelId'
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [runs]
+      summary: Get run
+      operationId: getRun
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunRead'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /models/{model_id}/drift:
+    parameters:
+      - $ref: '#/components/parameters/ModelId'
+    get:
+      tags: [drift]
+      summary: Get drift timeline
+      operationId: getDrift
+      responses:
+        '200':
+          description: PSI timeline and latest feature drift results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriftSummary'
+
+  /models/{model_id}/drift/features/{feature_name}/histogram:
+    parameters:
+      - $ref: '#/components/parameters/ModelId'
+      - name: feature_name
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [drift]
+      summary: Get feature histogram
+      operationId: getFeatureHistogram
+      responses:
+        '200':
+          description: Baseline vs current histogram for a feature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeatureHistogram'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /models/{model_id}/datasets:
+    parameters:
+      - $ref: '#/components/parameters/ModelId'
+
+    post:
+      tags: [datasets]
+      summary: Upload dataset
+      operationId: uploadDataset
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, role]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: CSV or Parquet file
+                role:
+                  type: string
+                  enum: [baseline, production]
+      responses:
+        '201':
+          description: Dataset uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatasetRead'
+        '400':
+          description: Invalid file format
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    get:
+      tags: [datasets]
+      summary: List datasets
+      operationId: listDatasets
+      responses:
+        '200':
+          description: All datasets for the model
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DatasetRead'
+
+  /alerts:
+    get:
+      tags: [alerts]
+      summary: List alerts
+      operationId: listAlerts
+      parameters:
+        - name: model_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [CRITICAL, WARNING]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, acknowledged, resolved]
+        - name: assigned_to_user_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter alerts assigned to a specific user
+      responses:
+        '200':
+          description: Alert list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertListResponse'
+
+  /alerts/{alert_id}:
+    parameters:
+      - name: alert_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [alerts]
+      summary: Update alert
+      operationId: updateAlert
+      description: |
+        Update alert status or assign to a user.
+
+        When `assigned_to_user_id` is set:
+        - Status automatically changes to `acknowledged`
+        - `acknowledged_at` is recorded
+        - Assignment notifications are sent to all enabled channels
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertUpdate'
+      responses:
+        '200':
+          description: Updated alert
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRead'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /connections:
+    get:
+      tags: [connections]
+      summary: List connections
+      operationId: listConnections
+      responses:
+        '200':
+          description: Storage connections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StorageConnectionRead'
+
+    post:
+      tags: [connections]
+      summary: Create connection
+      operationId: createConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageConnectionCreate'
+      responses:
+        '201':
+          description: Connection created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageConnectionRead'
+
+  /connections/{conn_id}:
+    parameters:
+      - name: conn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [connections]
+      summary: Get connection
+      operationId: getConnection
+      responses:
+        '200':
+          description: Connection details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageConnectionRead'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [connections]
+      summary: Update connection
+      operationId: updateConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageConnectionUpdate'
+      responses:
+        '200':
+          description: Updated connection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageConnectionRead'
+
+    delete:
+      tags: [connections]
+      summary: Delete connection
+      operationId: deleteConnection
+      responses:
+        '204':
+          description: Deleted
+
+  /connections/{conn_id}/test:
+    parameters:
+      - name: conn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [connections]
+      summary: Test connection
+      operationId: testConnection
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestResult'
+
+  /connections/{conn_id}/browse:
+    parameters:
+      - name: conn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        schema:
+          type: string
+          default: ""
+    get:
+      tags: [connections]
+      summary: Browse connection
+      operationId: browseConnection
+      responses:
+        '200':
+          description: Directory or table listing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowseResult'
+
+  /connections/{conn_id}/columns:
+    parameters:
+      - name: conn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [connections]
+      summary: Get column names
+      operationId: getConnectionColumns
+      responses:
+        '200':
+          description: Column names for the given path/table
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      type: string
+
+  /notifications:
+    get:
+      tags: [notifications]
+      summary: List channels
+      operationId: listChannels
+      responses:
+        '200':
+          description: Notification channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NotificationChannelRead'
+
+    post:
+      tags: [notifications]
+      summary: Create channel
+      operationId: createChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationChannelCreate'
+      responses:
+        '201':
+          description: Channel created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationChannelRead'
+
+  /notifications/{channel_id}:
+    parameters:
+      - name: channel_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    patch:
+      tags: [notifications]
+      summary: Update channel
+      operationId: updateChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationChannelUpdate'
+      responses:
+        '200':
+          description: Updated channel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationChannelRead'
+
+    delete:
+      tags: [notifications]
+      summary: Delete channel
+      operationId: deleteChannel
+      responses:
+        '204':
+          description: Deleted
+
+  /notifications/{channel_id}/test:
+    parameters:
+      - name: channel_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [notifications]
+      summary: Test channel
+      operationId: testChannel
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestResult'
+
+  /api-keys:
+    get:
+      tags: [api-keys]
+      summary: List API keys
+      operationId: listApiKeys
+      responses:
+        '200':
+          description: Active API keys (prefix only, no secrets)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKeyRead'
+
+    post:
+      tags: [api-keys]
+      summary: Create API key
+      operationId: createApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyCreate'
+      responses:
+        '201':
+          description: API key created — full_key shown once only
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreated'
+
+  /api-keys/{key_id}:
+    parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [api-keys]
+      summary: Revoke API key
+      operationId: revokeApiKey
+      responses:
+        '204':
+          description: Key revoked
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /teams:
+    get:
+      tags: [teams]
+      summary: List teams
+      operationId: listTeams
+      responses:
+        '200':
+          description: Teams with member counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TeamRead'
+
+    post:
+      tags: [teams]
+      summary: Create team
+      operationId: createTeam
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamCreate'
+      responses:
+        '201':
+          description: Team created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamRead'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /teams/{team_id}:
+    parameters:
+      - $ref: '#/components/parameters/TeamId'
+
+    get:
+      tags: [teams]
+      summary: Get team with members
+      operationId: getTeam
+      responses:
+        '200':
+          description: Team with full member list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamWithMembers'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [teams]
+      summary: Update team
+      operationId: updateTeam
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamUpdate'
+      responses:
+        '200':
+          description: Updated team
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamRead'
+
+    delete:
+      tags: [teams]
+      summary: Delete team
+      operationId: deleteTeam
+      responses:
+        '204':
+          description: Deleted
+        '409':
+          description: Team has models assigned — cannot delete
+
+  /teams/{team_id}/members:
+    parameters:
+      - $ref: '#/components/parameters/TeamId'
+
+    get:
+      tags: [teams]
+      summary: List members
+      operationId: listTeamMembers
+      responses:
+        '200':
+          description: Team membership list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MembershipRead'
+
+    post:
+      tags: [teams]
+      summary: Add member
+      operationId: addTeamMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MembershipCreate'
+      responses:
+        '201':
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipRead'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /teams/{team_id}/members/{user_id}:
+    parameters:
+      - $ref: '#/components/parameters/TeamId'
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    patch:
+      tags: [teams]
+      summary: Update member role
+      operationId: updateMemberRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MembershipUpdate'
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipRead'
+
+    delete:
+      tags: [teams]
+      summary: Remove member
+      operationId: removeTeamMember
+      responses:
+        '204':
+          description: Member removed
+
+  /teams/{team_id}/sync:
+    parameters:
+      - $ref: '#/components/parameters/TeamId'
+    post:
+      tags: [teams]
+      summary: Sync members from IdP
+      operationId: syncTeamMembers
+      description: |
+        Bulk-upsert team members from an external Identity Provider (Okta, Azure AD,
+        Google Workspace, LDAP). Adds new members, updates existing ones, and removes
+        stale external memberships not present in the payload.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamSyncRequest'
+      responses:
+        '200':
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added:
+                    type: integer
+                  updated:
+                    type: integer
+                  removed:
+                    type: integer
+
+  /users:
+    get:
+      tags: [users]
+      summary: List users
+      operationId: listUsers
+      responses:
+        '200':
+          description: Users with team memberships
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+
+    post:
+      tags: [users]
+      summary: Create user
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /users/{user_id}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [users]
+      summary: Get user
+      operationId: getUser
+      responses:
+        '200':
+          description: User with teams
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserWithTeams'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [users]
+      summary: Update user
+      operationId: updateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+
+    delete:
+      tags: [users]
+      summary: Deactivate user
+      operationId: deactivateUser
+      description: Sets is_active=false. Does not delete the user record.
+      responses:
+        '204':
+          description: User deactivated
+
+components:
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  parameters:
+    ModelId:
+      name: model_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    TeamId:
+      name: team_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'
+
+    Conflict:
+      description: Conflict (duplicate name or unique constraint violation)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'
+
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorDetail'
+
+  schemas:
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: Model not found
+
+    ValidationErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string
+
+    ColumnMapping:
+      type: object
+      properties:
+        features:
+          type: array
+          items:
+            type: string
+          description: Feature column names to monitor for drift
+        prediction_col:
+          type: string
+          description: Column containing model predictions
+        score_col:
+          type: string
+          description: Column containing prediction scores/probabilities
+        target_col:
+          type: string
+          description: Column containing ground truth labels
+        timestamp_col:
+          type: string
+          description: Column containing row timestamps (used for lookback filtering)
+        segment_cols:
+          type: array
+          items:
+            type: string
+
+    DataSourceConfig:
+      type: object
+      properties:
+        source_type:
+          type: string
+          enum: [upload, s3, gcs, sql, unity_catalog]
+        connection_id:
+          type: string
+          format: uuid
+          description: Required for non-upload source types
+        path:
+          type: string
+          description: S3 key, GCS blob path, SQL table name, or SELECT query
+        format:
+          type: string
+          enum: [csv, parquet]
+          default: csv
+
+    ModelCreate:
+      type: object
+      required: [name, type, team]
+      properties:
+        name:
+          type: string
+          example: Fraud Detector v2
+        version:
+          type: string
+          example: "2.1"
+        type:
+          type: string
+          enum: [classification, regression]
+        team:
+          type: string
+          example: Risk Engine
+        owner:
+          type: string
+          example: alice@example.com
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        engine:
+          type: string
+          enum: [local, spark, dask, sql]
+          default: local
+        schedule:
+          type: string
+          description: Cron expression (e.g. "0 */6 * * *")
+          example: "0 */6 * * *"
+        lookback_window:
+          type: string
+          default: 7d
+          example: 7d
+        comparison_strategy:
+          type: string
+          default: baseline_vs_current
+        column_mapping:
+          $ref: '#/components/schemas/ColumnMapping'
+        psi_warn_threshold:
+          type: number
+          default: 0.1
+        psi_crit_threshold:
+          type: number
+          default: 0.25
+        alert_cooldown_hours:
+          type: integer
+          default: 6
+        alert_channels:
+          type: array
+          items:
+            type: string
+        reference_dataset_config:
+          $ref: '#/components/schemas/DataSourceConfig'
+        inference_dataset_config:
+          $ref: '#/components/schemas/DataSourceConfig'
+
+    ModelUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ModelCreate'
+      description: All fields optional
+
+    ModelRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        type:
+          type: string
+        team:
+          type: string
+        owner:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [inactive, healthy, warning, critical]
+        engine:
+          type: string
+        schedule:
+          type: string
+        lookback_window:
+          type: string
+        global_psi:
+          type: number
+          nullable: true
+        global_perf:
+          type: number
+          nullable: true
+        dq_score:
+          type: number
+          nullable: true
+        psi_warn_threshold:
+          type: number
+        psi_crit_threshold:
+          type: number
+        alert_cooldown_hours:
+          type: integer
+        is_demo:
+          type: boolean
+        last_run_at:
+          type: string
+          format: date-time
+          nullable: true
+        psi_timeline:
+          type: array
+          items:
+            type: number
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ModelListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelRead'
+        total:
+          type: integer
+
+    ModelDetailRead:
+      allOf:
+        - $ref: '#/components/schemas/ModelRead'
+        - type: object
+          properties:
+            feature_drift:
+              type: array
+              items:
+                $ref: '#/components/schemas/DriftResultRead'
+            perf_timeline:
+              type: array
+              items:
+                $ref: '#/components/schemas/PerformanceResultRead'
+            quality_results:
+              type: array
+              items:
+                $ref: '#/components/schemas/QualityResultRead'
+            recent_runs:
+              type: array
+              items:
+                $ref: '#/components/schemas/RunRead'
+            active_alerts:
+              type: array
+              items:
+                $ref: '#/components/schemas/AlertRead'
+            datasets:
+              type: array
+              items:
+                $ref: '#/components/schemas/DatasetRead'
+
+    RunRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        model_id:
+          type: string
+          format: uuid
+        triggered_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: [running, success, failed]
+        engine:
+          type: string
+        duration_seconds:
+          type: number
+          nullable: true
+        window_start:
+          type: string
+          nullable: true
+        window_end:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+
+    DriftResultRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        model_id:
+          type: string
+          format: uuid
+        feature_name:
+          type: string
+        date:
+          type: string
+        psi:
+          type: number
+          nullable: true
+        ks_stat:
+          type: number
+          nullable: true
+        ks_pvalue:
+          type: number
+          nullable: true
+        jsd:
+          type: number
+          nullable: true
+        wasserstein:
+          type: number
+          nullable: true
+        chi2_stat:
+          type: number
+          nullable: true
+        chi2_pvalue:
+          type: number
+          nullable: true
+        is_drifted:
+          type: boolean
+        severity:
+          type: string
+          enum: [stable, warning, critical]
+        baseline_histogram:
+          type: object
+          nullable: true
+        current_histogram:
+          type: object
+          nullable: true
+
+    PerformanceResultRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        date:
+          type: string
+        accuracy:
+          type: number
+          nullable: true
+        f1_score:
+          type: number
+          nullable: true
+        auc_roc:
+          type: number
+          nullable: true
+        precision:
+          type: number
+          nullable: true
+        recall:
+          type: number
+          nullable: true
+        r2:
+          type: number
+          nullable: true
+        mae:
+          type: number
+          nullable: true
+        rmse:
+          type: number
+          nullable: true
+        prediction_psi:
+          type: number
+          nullable: true
+
+    QualityResultRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        feature_name:
+          type: string
+        date:
+          type: string
+        missing_rate:
+          type: number
+        outlier_rate:
+          type: number
+        null_count:
+          type: integer
+        total_count:
+          type: integer
+
+    DriftSummary:
+      type: object
+      properties:
+        psi_timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+              psi:
+                type: number
+        features:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriftResultRead'
+
+    FeatureHistogram:
+      type: object
+      properties:
+        feature_name:
+          type: string
+        psi:
+          type: number
+        ks_stat:
+          type: number
+          nullable: true
+        baseline_histogram:
+          type: object
+          properties:
+            bins:
+              type: array
+              items:
+                type: number
+            counts:
+              type: array
+              items:
+                type: integer
+        current_histogram:
+          type: object
+          properties:
+            bins:
+              type: array
+              items:
+                type: number
+            counts:
+              type: array
+              items:
+                type: integer
+
+    DatasetRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        model_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [baseline, production]
+        filename:
+          type: string
+        row_count:
+          type: integer
+          nullable: true
+        column_names:
+          type: array
+          items:
+            type: string
+          nullable: true
+        uploaded_at:
+          type: string
+          format: date-time
+
+    AssignedUserRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+        email:
+          type: string
+
+    AlertRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        model_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+          nullable: true
+        severity:
+          type: string
+          enum: [CRITICAL, WARNING]
+        metric_name:
+          type: string
+        metric_value:
+          type: number
+        threshold:
+          type: number
+        message:
+          type: string
+        status:
+          type: string
+          enum: [open, acknowledged, resolved]
+        feature_name:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        acknowledged_at:
+          type: string
+          format: date-time
+          nullable: true
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        assigned_to:
+          type: string
+          nullable: true
+          description: Display name cache (denormalised)
+        assigned_to_user_id:
+          type: string
+          format: uuid
+          nullable: true
+        assigned_user:
+          $ref: '#/components/schemas/AssignedUserRead'
+          nullable: true
+
+    AlertUpdate:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [open, acknowledged, resolved]
+          nullable: true
+        assigned_to:
+          type: string
+          nullable: true
+          description: Legacy display-name field (prefer assigned_to_user_id)
+        assigned_to_user_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            When set, automatically acknowledges the alert, records acknowledged_at,
+            and dispatches assignment notifications to all enabled channels.
+
+    AlertListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertRead'
+        total:
+          type: integer
+
+    StorageConnectionCreate:
+      type: object
+      required: [name, type, config]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [s3, gcs, sql, unity_catalog, kafka]
+        description:
+          type: string
+        config:
+          type: object
+          description: Connection-type-specific credentials and settings
+
+    StorageConnectionUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        config:
+          type: object
+
+    StorageConnectionRead:
+      allOf:
+        - $ref: '#/components/schemas/StorageConnectionCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            last_tested_at:
+              type: string
+              format: date-time
+              nullable: true
+            last_test_ok:
+              type: boolean
+              nullable: true
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    TestResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        message:
+          type: string
+
+    BrowseResult:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+                enum: [schema, table, view, bucket, folder, file]
+              path:
+                type: string
+              selectable:
+                type: string
+                nullable: true
+                description: Ready-to-use SELECT query or path string
+
+    NotificationChannelCreate:
+      type: object
+      required: [type, name, config]
+      properties:
+        type:
+          type: string
+          enum: [slack, pagerduty, email, webhook]
+        name:
+          type: string
+        enabled:
+          type: boolean
+          default: true
+        config:
+          type: object
+          description: Channel-type-specific configuration
+
+    NotificationChannelUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        enabled:
+          type: boolean
+        config:
+          type: object
+
+    NotificationChannelRead:
+      allOf:
+        - $ref: '#/components/schemas/NotificationChannelCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            last_tested_at:
+              type: string
+              format: date-time
+              nullable: true
+            last_test_ok:
+              type: boolean
+              nullable: true
+            last_test_message:
+              type: string
+              nullable: true
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    ApiKeyCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: CI Pipeline
+
+    ApiKeyRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        key_prefix:
+          type: string
+          description: First 12 characters of the key (e.g. mlm_abc123)
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ApiKeyCreated:
+      allOf:
+        - $ref: '#/components/schemas/ApiKeyRead'
+        - type: object
+          properties:
+            full_key:
+              type: string
+              description: Complete API key — shown only once, store securely
+              example: mlm_abc123def456ghi789jkl012mno345pqr678stu901vwx234
+
+    TeamCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: ML Platform
+        description:
+          type: string
+        external_id:
+          type: string
+        external_source:
+          type: string
+          enum: [okta, azure_ad, google, ldap]
+
+    TeamUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        external_id:
+          type: string
+        external_source:
+          type: string
+
+    TeamRead:
+      allOf:
+        - $ref: '#/components/schemas/TeamCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            slug:
+              type: string
+              description: URL-safe identifier auto-generated from name
+            member_count:
+              type: integer
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    TeamWithMembers:
+      allOf:
+        - $ref: '#/components/schemas/TeamRead'
+        - type: object
+          properties:
+            members:
+              type: array
+              items:
+                $ref: '#/components/schemas/MembershipRead'
+
+    MembershipCreate:
+      type: object
+      required: [user_id, role]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/RoleType'
+
+    MembershipUpdate:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/RoleType'
+
+    MembershipRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        team_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/RoleType'
+        created_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/UserRead'
+
+    RoleType:
+      type: string
+      enum: [can_review, can_edit, can_manage, can_admin]
+      description: |
+        - `can_review`: Read-only access
+        - `can_edit`: Full CRUD on team models
+        - `can_manage`: Edit + team member management
+        - `can_admin`: All permissions + cross-team access
+
+    SyncMember:
+      type: object
+      required: [email, role]
+      properties:
+        external_id:
+          type: string
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/RoleType'
+
+    TeamSyncRequest:
+      type: object
+      required: [members]
+      properties:
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncMember'
+
+    UserCreate:
+      type: object
+      required: [email, display_name]
+      properties:
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        external_id:
+          type: string
+        external_source:
+          type: string
+          enum: [okta, azure_ad, google, ldap]
+
+    UserUpdate:
+      type: object
+      properties:
+        display_name:
+          type: string
+        is_active:
+          type: boolean
+
+    UserRead:
+      allOf:
+        - $ref: '#/components/schemas/UserCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            is_active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    UserWithTeams:
+      allOf:
+        - $ref: '#/components/schemas/UserRead'
+        - type: object
+          properties:
+            memberships:
+              type: array
+              items:
+                $ref: '#/components/schemas/MembershipRead'
+
+    UserListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserWithTeams'
+        total:
+          type: integer

@@ -1,32 +1,33 @@
+import asyncio
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.config import settings
-from app.db.base import Base
-from app.db.session import engine, AsyncSessionLocal
+from app.db.session import AsyncSessionLocal
 from app.db.models import Model
 from app.db.seed import seed_demo_models
 from app.api.v1 import router as v1_router
 from app.scheduler import scheduler, register_model_job
 
 
+def _run_migrations_sync() -> None:
+    from alembic.config import Config
+    from alembic import command
+
+    alembic_cfg = Config("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Create tables on startup (dev convenience; Alembic handles schema evolution)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # Add is_demo column to existing DBs that predate this column
-        try:
-            await conn.execute(text("ALTER TABLE models ADD COLUMN is_demo BOOLEAN NOT NULL DEFAULT FALSE"))
-        except Exception:
-            pass  # column already exists — safe to ignore
-        try:
-            await conn.execute(text("ALTER TABLE alerts ADD COLUMN assigned_to TEXT"))
-        except Exception:
-            pass  # column already exists — safe to ignore
+    # 1. Run Alembic migrations — creates tables on first run, no-ops on subsequent runs
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor() as pool:
+        await loop.run_in_executor(pool, _run_migrations_sync)
 
     # 2. Seed demo models (idempotent — no-op if already seeded)
     async with AsyncSessionLocal() as db:
@@ -52,7 +53,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # 5. Shut down the scheduler on app stop
+    # 6. Shut down the scheduler on app stop
     scheduler.shutdown(wait=False)
 
 
