@@ -19,9 +19,11 @@ import AlertsView from './components/AlertsView.jsx'
 import SettingsView from './components/SettingsView.jsx'
 import OnboardingWizard from './components/OnboardingWizard.jsx'
 import TeamHealthView from './components/TeamHealthView.jsx'
+import LoginView from './components/LoginView.jsx'
 import { Toaster } from 'sonner'
 import { api } from './api.js'
 import { theme } from './utils/theme.js'
+import { supabase } from './supabase.js'
 
 const CURRENT_USER_KEY = 'ml_monitor_current_user'
 
@@ -168,6 +170,8 @@ function AppShell() {
   const navigate = useNavigate()
   const location = useLocation()
 
+  const [session, setSession]           = useState(null)
+  const [authLoading, setAuthLoading]   = useState(true)
   const [showWizard, setShowWizard]     = useState(false)
   const [now, setNow]                   = useState(new Date())
   const [models, setModels]             = useState([])
@@ -177,14 +181,16 @@ function AppShell() {
   const [teams, setTeams]               = useState([])
   const [users, setUsers]               = useState([])
   const [loading, setLoading]           = useState(true)
-  const [currentUser, setCurrentUser]   = useState(() => {
-    try { return JSON.parse(localStorage.getItem(CURRENT_USER_KEY)) } catch { return null }
-  })
 
-  const handleSetCurrentUser = useCallback((user) => {
-    setCurrentUser(user)
-    if (user) localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user))
-    else localStorage.removeItem(CURRENT_USER_KEY)
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setAuthLoading(false)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
+      setSession(session)
+    })
+    return () => subscription.unsubscribe()
   }, [])
 
   const fetchData = useCallback(() => {
@@ -205,13 +211,21 @@ function AppShell() {
   }, [])
 
   useEffect(() => {
+    if (!session) return
     fetchData()
     const id = setInterval(() => {
       setNow(new Date())
       fetchData()
     }, 30_000)
     return () => clearInterval(id)
-  }, [fetchData])
+  }, [fetchData, session])
+
+  if (authLoading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0f1117', color: '#64748b', fontSize: 13 }}>
+      Loading…
+    </div>
+  )
+  if (!session) return <LoginView />
 
   const openAlerts = alerts.filter((a) => a.status === 'open').length
   const path = location.pathname
@@ -312,12 +326,21 @@ function AppShell() {
           {now.toISOString().slice(0, 16).replace('T', ' ')} UTC
         </span>
 
-        {/* Identity picker */}
-        <IdentityPicker
-          currentUser={currentUser}
-          users={users}
-          onSelect={handleSetCurrentUser}
-        />
+        {/* Logged-in user + sign out */}
+        <span style={{ fontSize: 12, color: theme.textDim }}>{session.user.email}</span>
+        <button
+          onClick={() => supabase.auth.signOut()}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '5px 12px', borderRadius: 8,
+            border: `1px solid ${theme.border}`, background: theme.bgCard,
+            color: theme.textMuted, cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 12, fontWeight: 500,
+          }}
+        >
+          <Icon name="log-out" size={12} />
+          Sign out
+        </button>
       </header>
 
       {/* ═══════════ Content ═══════════ */}
@@ -347,7 +370,7 @@ function AppShell() {
                 alerts={alerts}
                 models={[...models, ...demoModels]}
                 teams={teams}
-                currentUser={currentUser}
+                currentUser={null}
                 onSelectModel={(m) => navigate('/models/' + m.id)}
                 onRefresh={fetchData}
               />

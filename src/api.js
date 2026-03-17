@@ -2,11 +2,20 @@
    API client — wraps all backend calls
    ═══════════════════════════════════════════ */
 
+import { supabase } from './supabase'
+
 const BASE = import.meta.env.VITE_API_URL ?? ''
 
+async function getAuthHeader() {
+  const { data: { session } } = await supabase.auth.getSession()
+  const token = session?.access_token
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 async function request(path, options = {}) {
+  const authHeader = await getAuthHeader()
   const res = await fetch(`${BASE}/api/v1${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: { 'Content-Type': 'application/json', ...authHeader, ...options.headers },
     ...options,
   })
   if (!res.ok) {
@@ -69,12 +78,14 @@ export const api = {
     request(`/models/${id}`, { method: 'DELETE' }),
 
   // ── Datasets ─────────────────────────────
-  uploadDataset: (modelId, file, role) => {
+  uploadDataset: async (modelId, file, role) => {
+    const authHeader = await getAuthHeader()
     const fd = new FormData()
     fd.append('file', file)
     fd.append('role', role)
     return fetch(`${BASE}/api/v1/models/${modelId}/datasets`, {
       method: 'POST',
+      headers: authHeader,
       body: fd,
     }).then((r) => {
       if (!r.ok) return r.text().then((t) => { throw new Error(t) })
