@@ -256,22 +256,13 @@ export default function ModelDetail({ model: m, onBack, onRefresh }) {
     setRunPending(true)
     try {
       await api.triggerRun(m.id)
-      // Poll until run completes
-      const poll = setInterval(async () => {
-        const runs = await api.listRuns(m.id).catch(() => null)
-        if (runs && runs.length > 0) {
-          const latest = runs[0]
-          if (latest.status !== 'running') {
-            clearInterval(poll)
-            setRunPending(false)
-            if (onRefresh) onRefresh(m.id)
-          }
-        }
-      }, 2500)
-      // Safety timeout after 60s
-      setTimeout(() => { clearInterval(poll); setRunPending(false) }, 60000)
+      setRunPending(false)
+      const duration = 3000
+      toast.info('Run is being executed…', { duration })
+      setTimeout(() => { handleTabChange('runs'); onRefresh(m.id) }, duration)
     } catch {
       setRunPending(false)
+      toast.error('Failed to trigger run')
     }
   }
 
@@ -322,8 +313,9 @@ export default function ModelDetail({ model: m, onBack, onRefresh }) {
   const handleDelete = async () => {
     try {
       await api.deleteModel(m.id)
-      toast.success(`"${m.name}" deleted`, { duration: 1000 })
-      onBack()
+      const duration = 3000
+      toast.success(`"${m.name}" deleted`, { duration })
+      setTimeout(() => onBack(), duration)
     } catch {
       setShowDelete(false)
     }
@@ -674,7 +666,7 @@ export default function ModelDetail({ model: m, onBack, onRefresh }) {
               </tr>
             </thead>
             <tbody>
-              {m.runs.slice().reverse().map((r) => (
+              {m.runs.map((r) => (
                 <tr key={r.id} style={{ borderBottom: `1px solid ${theme.border}08` }}>
                   <td style={{ padding: '8px 10px', color: theme.textDim, fontFamily: 'var(--font-mono)', fontSize: 11 }}>{r.id.slice(0, 8)}</td>
                   <td style={{ padding: '8px 10px', color: theme.textMuted }}>{r.triggered_at.slice(0, 16).replace('T', ' ')}</td>
