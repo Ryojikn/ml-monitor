@@ -20,6 +20,53 @@ import { api } from '../api.js'
 import { ENGINES } from '../utils/constants.js'
 import { toast } from 'sonner'
 
+/* ── Model type rendering templates ── */
+const TYPE_TEMPLATES = {
+  classification: {
+    primaryLabel: 'AUC-ROC',
+    cards: [
+      { key: 'auc_roc',   label: 'AUC-ROC',    higherBetter: true },
+      { key: 'f1_score',  label: 'F1',          higherBetter: true },
+      { key: 'precision', label: 'Precision',   higherBetter: true },
+      { key: 'recall',    label: 'Recall',      higherBetter: true },
+      { key: 'accuracy',  label: 'Accuracy',    higherBetter: true },
+    ],
+  },
+  regression: {
+    primaryLabel: 'R² Score',
+    cards: [
+      { key: 'r2',   label: 'R²',   higherBetter: true },
+      { key: 'mae',  label: 'MAE',  higherBetter: false },
+      { key: 'rmse', label: 'RMSE', higherBetter: false },
+    ],
+  },
+  ranking: {
+    primaryLabel: 'NDCG@k',
+    cards: [
+      { key: 'ndcg_at_k', label: 'NDCG@k',  higherBetter: true },
+      { key: 'mrr',       label: 'MRR',      higherBetter: true },
+      { key: 'map_at_k',  label: 'MAP@k',    higherBetter: true },
+    ],
+  },
+  clustering: {
+    primaryLabel: 'Silhouette Score',
+    cards: [
+      { key: 'silhouette_score', label: 'Silhouette',  higherBetter: true },
+      { key: 'cluster_count',    label: 'Clusters',    higherBetter: null },
+    ],
+  },
+  llm: {
+    primaryLabel: 'Response Drift (PSI)',
+    cards: [
+      { key: 'response_length_mean',  label: 'Avg Length',       higherBetter: null },
+      { key: 'response_length_drift', label: 'Length Drift',     higherBetter: false },
+      { key: 'latency_p50',           label: 'Latency P50 (ms)', higherBetter: false },
+      { key: 'latency_p95',           label: 'Latency P95 (ms)', higherBetter: false },
+      { key: 'token_count_mean',      label: 'Avg Tokens',       higherBetter: null },
+    ],
+  },
+}
+
 /* ── Histogram shift analyser ── */
 function analyzeHistogramShift(baseline, current) {
   const bins = baseline?.bins ?? []
@@ -355,7 +402,7 @@ export default function ModelDetail({ model: m, onBack, onRefresh }) {
           color={m.dqScore > 0.95 ? theme.green : m.dqScore > 0.9 ? theme.yellow : theme.red} icon="database" />
         <MetricCard label="Performance" value={fmt(m.globalPerf, 3)}
           color={m.globalPerf > 0.85 ? theme.green : m.globalPerf > 0.7 ? theme.yellow : theme.red}
-          icon="activity" subtitle={m.type === 'regression' ? 'R²' : 'AUC-ROC'} />
+          icon="activity" subtitle={TYPE_TEMPLATES[m.type]?.primaryLabel ?? 'Performance'} />
       </div>
 
       <TabBar tabs={TABS} active={tab} onChange={handleTabChange} />
@@ -531,44 +578,81 @@ export default function ModelDetail({ model: m, onBack, onRefresh }) {
       )}
 
       {/* ════════════════════════ PERFORMANCE TAB ════════════════════════ */}
-      {tab === 'performance' && (
-        <div>
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Icon name="activity" size={14} style={{ color: theme.green }} />
-              <span>{m.type === 'regression' ? 'R² Score' : 'AUC-ROC'} Over Time</span>
-              {(() => { const pi = generatePerformanceInsight(m.performanceTimeline, m.type, 0.8); return pi ? <InsightPopover {...pi} /> : null })()}
-            </div>
-            <ResponsiveContainer width="100%" height={250}>
-              <ComposedChart data={m.performanceTimeline}>
-                <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                <XAxis dataKey="date" tick={{ fill: theme.textDim, fontSize: 10 }} tickFormatter={(v) => v.slice(5)} />
-                <YAxis tick={{ fill: theme.textDim, fontSize: 10 }} domain={['auto', 'auto']} />
-                <Tooltip content={<ChartTooltip />} />
-                <ReferenceLine y={0.8} stroke={theme.yellow} strokeDasharray="4 4" />
-                <Area type="monotone" dataKey="value" fill={theme.green + '15'} stroke={theme.green} strokeWidth={2} name={m.type === 'regression' ? 'R²' : 'AUC-ROC'} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </Card>
-          <Card>
-            <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, marginBottom: 12 }}>
-              <Icon name="bar-chart-2" size={14} style={{ marginRight: 6, verticalAlign: -2, color: theme.accent }} />
-              Prediction Distribution Drift
-            </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart data={m.predictionDrift}>
-                <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                <XAxis dataKey="date" tick={{ fill: theme.textDim, fontSize: 10 }} tickFormatter={(v) => v.slice(5)} />
-                <YAxis tick={{ fill: theme.textDim, fontSize: 10 }} />
-                <Tooltip content={<ChartTooltip />} />
-                <ReferenceLine y={0.1}  stroke={theme.yellow} strokeDasharray="3 3" />
-                <ReferenceLine y={0.25} stroke={theme.red}    strokeDasharray="3 3" />
-                <Area type="monotone" dataKey="value" fill={theme.blue + '15'} stroke={theme.blue} strokeWidth={2} name="Prediction PSI" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </Card>
-        </div>
-      )}
+      {tab === 'performance' && (() => {
+        const tmpl = TYPE_TEMPLATES[m.type]
+        const primaryLabel = tmpl?.primaryLabel ?? 'Performance'
+        const perfCards = tmpl?.cards ?? []
+        const metrics = m.latestPerfMetrics ?? {}
+        return (
+          <div>
+            <Card style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Icon name="activity" size={14} style={{ color: theme.green }} />
+                <span>{primaryLabel} Over Time</span>
+                {(() => { const pi = generatePerformanceInsight(m.performanceTimeline, m.type, 0.8); return pi ? <InsightPopover {...pi} /> : null })()}
+              </div>
+              {m.performanceTimeline?.length > 0 ? (
+                <ResponsiveContainer width="100%" height={250}>
+                  <ComposedChart data={m.performanceTimeline}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                    <XAxis dataKey="date" tick={{ fill: theme.textDim, fontSize: 10 }} tickFormatter={(v) => v.slice(5)} />
+                    <YAxis tick={{ fill: theme.textDim, fontSize: 10 }} domain={['auto', 'auto']} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <ReferenceLine y={0.8} stroke={theme.yellow} strokeDasharray="4 4" />
+                    <Area type="monotone" dataKey="value" fill={theme.green + '15'} stroke={theme.green} strokeWidth={2} name={primaryLabel} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : (
+                <div style={{ height: 250, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: theme.textDim }}>
+                  <Icon name="info" size={18} />
+                  <span style={{ fontSize: 13 }}>No {primaryLabel} data yet.</span>
+                  <span style={{ fontSize: 12, textAlign: 'center', maxWidth: 360 }}>
+                    {m.type === 'clustering'
+                      ? 'Trigger a monitoring run. Silhouette score requires at least 2 clusters and numeric feature columns.'
+                      : 'Trigger a monitoring run to start tracking performance over time.'}
+                  </span>
+                </div>
+              )}
+            </Card>
+
+            {/* ── Latest metric cards ── */}
+            {perfCards.length > 0 && Object.keys(metrics).length > 0 && (
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                {perfCards.map(({ key, label, higherBetter }) => {
+                  const val = metrics[key]
+                  if (val == null) return null
+                  const color = higherBetter === true
+                    ? (val > 0.8 ? theme.green : val > 0.6 ? theme.yellow : theme.red)
+                    : higherBetter === false
+                      ? (val < 0.1 ? theme.green : val < 0.25 ? theme.yellow : theme.red)
+                      : theme.accent
+                  return (
+                    <MetricCard key={key} label={label} value={fmt(val, 3)} color={color} icon="activity" />
+                  )
+                })}
+              </div>
+            )}
+
+            <Card>
+              <div style={{ fontSize: 14, fontWeight: 600, color: theme.text, marginBottom: 12 }}>
+                <Icon name="bar-chart-2" size={14} style={{ marginRight: 6, verticalAlign: -2, color: theme.accent }} />
+                Prediction Distribution Drift
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={m.predictionDrift}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                  <XAxis dataKey="date" tick={{ fill: theme.textDim, fontSize: 10 }} tickFormatter={(v) => v.slice(5)} />
+                  <YAxis tick={{ fill: theme.textDim, fontSize: 10 }} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <ReferenceLine y={0.1}  stroke={theme.yellow} strokeDasharray="3 3" />
+                  <ReferenceLine y={0.25} stroke={theme.red}    strokeDasharray="3 3" />
+                  <Area type="monotone" dataKey="value" fill={theme.blue + '15'} stroke={theme.blue} strokeWidth={2} name="Prediction PSI" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+        )
+      })()}
 
       {/* ════════════════════════ DATA QUALITY TAB ════════════════════════ */}
       {tab === 'quality' && (

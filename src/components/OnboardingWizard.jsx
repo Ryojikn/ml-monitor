@@ -426,7 +426,36 @@ function ScheduleBuilder({ form, u }) {
 
 /* ── ColumnMappingStep ── */
 
-function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingColumns }) {
+const TYPE_COL_CONFIG = {
+  classification: { showPrediction: true, showTarget: true, showScore: true, showSegment: true },
+  regression:     { showPrediction: true, showTarget: true, showScore: false, showSegment: true },
+  ranking: {
+    label: 'Ranking Columns',
+    fields: [
+      { key: 'queryIdCol',   label: 'Query ID Column',        required: true,  placeholder: 'query_id' },
+      { key: 'relevanceCol', label: 'Relevance Label Column', required: true,  placeholder: 'relevance' },
+      { key: 'scoreCol',     label: 'Ranking Score Column',   required: true,  placeholder: 'score' },
+      { key: 'rankingK',     label: 'k (NDCG@k, MAP@k)',      required: false, placeholder: '10' },
+    ],
+  },
+  clustering: {
+    label: 'Clustering Columns',
+    fields: [
+      { key: 'clusterIdCol', label: 'Cluster ID Column', required: true, placeholder: 'cluster_id' },
+    ],
+  },
+  llm: {
+    label: 'LLM Columns',
+    fields: [
+      { key: 'promptCol',   label: 'Prompt Column',        required: true,  placeholder: 'prompt' },
+      { key: 'responseCol', label: 'Response Column',      required: true,  placeholder: 'response' },
+      { key: 'latencyCol',  label: 'Latency Column (ms)',  required: false, placeholder: 'latency_ms' },
+      { key: 'tokenCol',    label: 'Token Count Column',   required: false, placeholder: 'token_count' },
+    ],
+  },
+}
+
+function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingColumns, modelType }) {
   const cols = discoveredColumns
   const hasCols = cols.length > 0
 
@@ -444,6 +473,8 @@ function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingC
   const toggleAll = () => u('selectedFeatures', allSelected ? [] : [...cols])
 
   const canLoad = !!(form.refConnId && form.refPath)
+  const typeCfg = TYPE_COL_CONFIG[modelType] ?? TYPE_COL_CONFIG.classification
+  const isCustomType = ['ranking', 'clustering', 'llm'].includes(modelType)
 
   if (!hasCols) {
     return (
@@ -471,21 +502,47 @@ function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingC
           </div>
         )}
 
-        {/* Fallback: text inputs */}
+        {/* Feature + Timestamp — always shown */}
         <Field label="Feature Columns (comma-separated)">
           <Input value={form.features} onChange={(v) => u('features', v)} placeholder="age, income, credit_score, ..." mono />
         </Field>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <Field label="Prediction Column"><Input value={form.predictionCol} onChange={(v) => u('predictionCol', v)} mono /></Field>
-          <Field label="Target Column (optional)"><Input value={form.targetCol} onChange={(v) => u('targetCol', v)} mono /></Field>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <Field label="Score Column (optional)"><Input value={form.scoreCol ?? ''} onChange={(v) => u('scoreCol', v)} mono /></Field>
-          <Field label="Timestamp Column (optional)"><Input value={form.timestampCol} onChange={(v) => u('timestampCol', v)} mono /></Field>
-        </div>
-        <Field label="Segment Columns (optional, comma-separated)">
-          <Input value={form.segments} onChange={(v) => u('segments', v)} placeholder="region, channel" mono />
+        <Field label="Timestamp Column (optional)">
+          <Input value={form.timestampCol} onChange={(v) => u('timestampCol', v)} mono />
         </Field>
+
+        {/* classification / regression */}
+        {!isCustomType && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Field label="Prediction Column"><Input value={form.predictionCol} onChange={(v) => u('predictionCol', v)} mono /></Field>
+              <Field label="Target Column (optional)"><Input value={form.targetCol} onChange={(v) => u('targetCol', v)} mono /></Field>
+            </div>
+            {typeCfg.showScore && (
+              <Field label="Score Column (optional)"><Input value={form.scoreCol ?? ''} onChange={(v) => u('scoreCol', v)} mono /></Field>
+            )}
+            {typeCfg.showSegment && (
+              <Field label="Segment Columns (optional, comma-separated)">
+                <Input value={form.segments} onChange={(v) => u('segments', v)} placeholder="region, channel" mono />
+              </Field>
+            )}
+          </>
+        )}
+
+        {/* ranking / clustering / llm */}
+        {isCustomType && (
+          <div style={{ marginTop: 16, padding: '12px 16px', background: theme.bgSurface, borderRadius: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: theme.accent, marginBottom: 10 }}>
+              {typeCfg.label}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {typeCfg.fields.map(({ key, label, required, placeholder }) => (
+                <Field key={key} label={`${label}${required ? '' : ' (optional)'}`}>
+                  <Input value={form[key] ?? ''} onChange={(v) => u(key, v)} placeholder={placeholder} mono />
+                </Field>
+              ))}
+            </div>
+          </div>
+        )}
       </>
     )
   }
@@ -526,26 +583,50 @@ function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingC
         </div>
       </Field>
 
-      {/* Column dropdowns */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Field label="Prediction Column">
-          <Select value={form.predictionCol} onChange={(v) => u('predictionCol', v)} style={{ width: '100%' }} options={colOptions} />
-        </Field>
-        <Field label="Target Column (optional)">
-          <Select value={form.targetCol} onChange={(v) => u('targetCol', v)} style={{ width: '100%' }} options={colOptions} />
-        </Field>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Field label="Score Column (optional)">
-          <Select value={form.scoreCol ?? ''} onChange={(v) => u('scoreCol', v)} style={{ width: '100%' }} options={colOptions} />
-        </Field>
-        <Field label="Timestamp Column (optional)">
-          <Select value={form.timestampCol} onChange={(v) => u('timestampCol', v)} style={{ width: '100%' }} options={colOptions} />
-        </Field>
-      </div>
-      <Field label="Segment Column (optional)">
-        <Select value={form.segments} onChange={(v) => u('segments', v)} style={{ width: '100%' }} options={colOptions} />
+      {/* Timestamp — always shown */}
+      <Field label="Timestamp Column (optional)">
+        <Select value={form.timestampCol} onChange={(v) => u('timestampCol', v)} style={{ width: '100%' }} options={colOptions} />
       </Field>
+
+      {/* classification / regression dropdowns */}
+      {!isCustomType && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Field label="Prediction Column">
+              <Select value={form.predictionCol} onChange={(v) => u('predictionCol', v)} style={{ width: '100%' }} options={colOptions} />
+            </Field>
+            <Field label="Target Column (optional)">
+              <Select value={form.targetCol} onChange={(v) => u('targetCol', v)} style={{ width: '100%' }} options={colOptions} />
+            </Field>
+          </div>
+          {typeCfg.showScore && (
+            <Field label="Score Column (optional)">
+              <Select value={form.scoreCol ?? ''} onChange={(v) => u('scoreCol', v)} style={{ width: '100%' }} options={colOptions} />
+            </Field>
+          )}
+          {typeCfg.showSegment && (
+            <Field label="Segment Column (optional)">
+              <Select value={form.segments} onChange={(v) => u('segments', v)} style={{ width: '100%' }} options={colOptions} />
+            </Field>
+          )}
+        </>
+      )}
+
+      {/* ranking / clustering / llm dropdowns */}
+      {isCustomType && (
+        <div style={{ marginTop: 16, padding: '12px 16px', background: theme.bgSurface, borderRadius: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: theme.accent, marginBottom: 10 }}>
+            {typeCfg.label}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            {typeCfg.fields.map(({ key, label, required, placeholder }) => (
+              <Field key={key} label={`${label}${required ? '' : ' (optional)'}`}>
+                <Select value={form[key] ?? ''} onChange={(v) => u(key, v)} style={{ width: '100%' }} options={colOptions} />
+              </Field>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -569,6 +650,9 @@ export default function OnboardingWizard({ onClose, teams: teamsProp = [] }) {
     description: '', refSource: 'upload', refPath: '', refConnId: '', prodSource: 'upload', prodPath: '', prodConnId: '',
     timestampCol: '', predictionCol: '', targetCol: '', scoreCol: '',
     features: '', selectedFeatures: [], segments: '',
+    queryIdCol: '', relevanceCol: '', rankingK: '10',
+    clusterIdCol: '',
+    promptCol: '', responseCol: '', latencyCol: '', tokenCol: '',
     scheduleFreq: 'daily', scheduleEveryN: '2', scheduleTime: '06:00', scheduleDay: '1',
     cron: '0 6 * * *',
     lookback: '7d', engine: 'local', psiWarn: '0.10', psiCrit: '0.25', channels: 'slack',
@@ -604,6 +688,13 @@ export default function OnboardingWizard({ onClose, teams: teamsProp = [] }) {
       targetCol: p.targetCol || find('target', 'label', 'y_true', 'y'),
       timestampCol: p.timestampCol || find('dat_ref', 'timestamp', 'event_timestamp', 'date', 'ts'),
       scoreCol: p.scoreCol || find('prediction_score', 'score', 'proba', 'probability'),
+      queryIdCol: p.queryIdCol || find('query_id', 'query'),
+      relevanceCol: p.relevanceCol || find('relevance', 'relevant'),
+      clusterIdCol: p.clusterIdCol || find('cluster_id', 'cluster'),
+      promptCol: p.promptCol || find('prompt', 'question', 'input'),
+      responseCol: p.responseCol || find('response', 'answer', 'output'),
+      latencyCol: p.latencyCol || find('latency_ms', 'latency', 'response_time'),
+      tokenCol: p.tokenCol || find('token_count', 'tokens', 'num_tokens'),
       selectedFeatures: p.selectedFeatures.length > 0
         ? p.selectedFeatures
         : cols.filter((c) => !special.has(c.toLowerCase())),
@@ -646,11 +737,28 @@ export default function OnboardingWizard({ onClose, teams: teamsProp = [] }) {
           features: form.selectedFeatures.length > 0
             ? form.selectedFeatures
             : form.features.split(',').map((s) => s.trim()).filter(Boolean),
-          prediction_col: form.predictionCol || '',
-          target_col: form.targetCol || '',
           timestamp_col: form.timestampCol || '',
-          score_col: form.scoreCol || '',
-          segment_cols: form.segments ? [form.segments] : [],
+          segment_cols: form.segments ? form.segments.split(',').map((s) => s.trim()).filter(Boolean) : [],
+          ...(form.type === 'classification' || form.type === 'regression' ? {
+            prediction_col: form.predictionCol || '',
+            target_col: form.targetCol || '',
+            score_col: form.scoreCol || '',
+          } : {}),
+          ...(form.type === 'ranking' ? {
+            score_col: form.scoreCol || '',
+            query_id_col: form.queryIdCol || '',
+            relevance_col: form.relevanceCol || '',
+            ranking_k: parseInt(form.rankingK, 10) || 10,
+          } : {}),
+          ...(form.type === 'clustering' ? {
+            cluster_id_col: form.clusterIdCol || '',
+          } : {}),
+          ...(form.type === 'llm' ? {
+            prompt_col: form.promptCol || '',
+            response_col: form.responseCol || '',
+            latency_col: form.latencyCol || '',
+            token_col: form.tokenCol || '',
+          } : {}),
         },
         reference_dataset_config: form.refSource !== 'upload' && form.refPath ? {
           source_type: form.refSource,
@@ -829,6 +937,7 @@ export default function OnboardingWizard({ onClose, teams: teamsProp = [] }) {
               discoveredColumns={form.discoveredColumns}
               onLoadColumns={handleLoadColumns}
               loadingColumns={loadingColumns}
+              modelType={form.type}
             />
           )}
 

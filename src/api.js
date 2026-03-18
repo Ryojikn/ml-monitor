@@ -51,6 +51,7 @@ function normalizeModel(m) {
       feature: d.feature,
       rate: d.rate ?? d.value ?? 0,
     })),
+    latestPerfMetrics: m.latest_perf_metrics ?? m.latestPerfMetrics ?? {},
     runs:     m.runs     ?? [],
     alerts:   m.alerts   ?? [],
     datasets: m.datasets ?? [],
