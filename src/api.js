@@ -80,9 +80,31 @@ export const api = {
   // ── Datasets ─────────────────────────────
   uploadDataset: async (modelId, file, role) => {
     const authHeader = await getAuthHeader()
+
+    // Upload directly to Supabase Storage from the browser — bypasses the
+    // Vercel 4.5 MB serverless payload limit entirely.
+    const storageKey = `${modelId}/${role}/${file.name}`
+    const { error: uploadError } = await supabase.storage
+      .from('datasets')
+      .upload(storageKey, file, { upsert: true })
+
+    if (uploadError) throw new Error(`Storage upload failed: ${uploadError.message}`)
+
+    // Parse CSV headers + row count locally so the backend needs zero file I/O.
+    const text = await file.text()
+    const lines = text.split('\n').filter(Boolean)
+    const columnNames = lines[0]
+      ? lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''))
+      : []
+    const rowCount = Math.max(0, lines.length - 1)
+
+    // Notify backend: record the dataset in DB with the storage key + metadata.
     const fd = new FormData()
-    fd.append('file', file)
     fd.append('role', role)
+    fd.append('storage_key', storageKey)
+    fd.append('row_count', String(rowCount))
+    fd.append('column_names', JSON.stringify(columnNames))
+
     return fetch(`${BASE}/api/v1/models/${modelId}/datasets`, {
       method: 'POST',
       headers: authHeader,
