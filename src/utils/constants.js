@@ -4,7 +4,7 @@ export const TEAMS = [
 ]
 
 export const MODEL_TYPES = [
-  'classification', 'regression', 'ranking', 'clustering', 'llm',
+  'classification', 'regression', 'ranking', 'clustering',
 ]
 
 export const SEVERITIES = ['INFO', 'WARNING', 'CRITICAL']

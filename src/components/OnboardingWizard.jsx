@@ -444,15 +444,6 @@ const TYPE_COL_CONFIG = {
       { key: 'clusterIdCol', label: 'Cluster ID Column', required: true, placeholder: 'cluster_id' },
     ],
   },
-  llm: {
-    label: 'LLM Columns',
-    fields: [
-      { key: 'promptCol',   label: 'Prompt Column',        required: true,  placeholder: 'prompt' },
-      { key: 'responseCol', label: 'Response Column',      required: true,  placeholder: 'response' },
-      { key: 'latencyCol',  label: 'Latency Column (ms)',  required: false, placeholder: 'latency_ms' },
-      { key: 'tokenCol',    label: 'Token Count Column',   required: false, placeholder: 'token_count' },
-    ],
-  },
 }
 
 function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingColumns, modelType }) {
@@ -474,7 +465,7 @@ function ColumnMappingStep({ form, u, discoveredColumns, onLoadColumns, loadingC
 
   const canLoad = !!(form.refConnId && form.refPath)
   const typeCfg = TYPE_COL_CONFIG[modelType] ?? TYPE_COL_CONFIG.classification
-  const isCustomType = ['ranking', 'clustering', 'llm'].includes(modelType)
+  const isCustomType = ['ranking', 'clustering'].includes(modelType)
 
   if (!hasCols) {
     return (
@@ -652,7 +643,6 @@ export default function OnboardingWizard({ onClose, teams: teamsProp = [] }) {
     features: '', selectedFeatures: [], segments: '',
     queryIdCol: '', relevanceCol: '', rankingK: '10',
     clusterIdCol: '',
-    promptCol: '', responseCol: '', latencyCol: '', tokenCol: '',
     scheduleFreq: 'daily', scheduleEveryN: '2', scheduleTime: '06:00', scheduleDay: '1',
     cron: '0 6 * * *',
     lookback: '7d', engine: 'local', psiWarn: '0.10', psiCrit: '0.25', channels: 'slack',
@@ -691,10 +681,6 @@ export default function OnboardingWizard({ onClose, teams: teamsProp = [] }) {
       queryIdCol: p.queryIdCol || find('query_id', 'query'),
       relevanceCol: p.relevanceCol || find('relevance', 'relevant'),
       clusterIdCol: p.clusterIdCol || find('cluster_id', 'cluster'),
-      promptCol: p.promptCol || find('prompt', 'question', 'input'),
-      responseCol: p.responseCol || find('response', 'answer', 'output'),
-      latencyCol: p.latencyCol || find('latency_ms', 'latency', 'response_time'),
-      tokenCol: p.tokenCol || find('token_count', 'tokens', 'num_tokens'),
       selectedFeatures: p.selectedFeatures.length > 0
         ? p.selectedFeatures
         : cols.filter((c) => !special.has(c.toLowerCase())),
@@ -752,12 +738,6 @@ export default function OnboardingWizard({ onClose, teams: teamsProp = [] }) {
           } : {}),
           ...(form.type === 'clustering' ? {
             cluster_id_col: form.clusterIdCol || '',
-          } : {}),
-          ...(form.type === 'llm' ? {
-            prompt_col: form.promptCol || '',
-            response_col: form.responseCol || '',
-            latency_col: form.latencyCol || '',
-            token_col: form.tokenCol || '',
           } : {}),
         },
         reference_dataset_config: form.refSource !== 'upload' && form.refPath ? {

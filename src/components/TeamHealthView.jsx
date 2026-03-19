@@ -27,6 +27,16 @@ const TYPE_COLOR = {
   other:       theme.textDim,
 }
 
+/* ── Duration formatter ─────────────────── */
+function fmtMs(ms) {
+  if (ms == null || isNaN(ms) || ms <= 0) return null
+  const h = Math.floor(ms / 3_600_000)
+  const m = Math.floor((ms % 3_600_000) / 60_000)
+  if (h >= 48) return `${Math.round(h / 24)}d`
+  if (h >= 1)  return `${h}h ${m}m`
+  return `${m || '<1'}m`
+}
+
 /* ── Maturity score computation ──────────── */
 function computeMaturity(teamModels, teamAlerts) {
   const now = Date.now()
@@ -102,6 +112,20 @@ function weeklyBuckets(alerts, weeks = 6) {
   })
 }
 
+/* ── TTA / TTR timings ───────────────────── */
+function computeTimings(teamAlerts) {
+  const ttaDeltas = teamAlerts
+    .filter(a => a.acknowledged_at)
+    .map(a => new Date(a.acknowledged_at) - new Date(a.created_at))
+    .filter(d => d > 0)
+  const ttrDeltas = teamAlerts
+    .filter(a => a.resolved_at)
+    .map(a => new Date(a.resolved_at) - new Date(a.created_at))
+    .filter(d => d > 0)
+  const avg = arr => arr.length ? arr.reduce((s, d) => s + d, 0) / arr.length : null
+  return { ttaDeltas, ttrDeltas, tta: fmtMs(avg(ttaDeltas)), ttr: fmtMs(avg(ttrDeltas)) }
+}
+
 /* ── Per-team aggregation ────────────────── */
 function buildTeamData(team, models, alerts) {
   const teamModels = models.filter(m => m.team === team.name)
@@ -126,6 +150,7 @@ function buildTeamData(team, models, alerts) {
     recurringIssues,
     alertWeekly: weeklyBuckets(teamAlerts),
     maturity:    computeMaturity(teamModels, teamAlerts),
+    ...computeTimings(teamAlerts),
   }
 }
 
@@ -365,6 +390,16 @@ function TeamMaturityCard({ td, expanded, onToggle, onSelectModel }) {
                 <Icon name="rotate-cw" size={11} />{td.recurringIssues.length} recurring
               </span>
             )}
+            {td.tta && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: theme.yellow }}>
+                <Icon name="clock" size={11} />TTA {td.tta}
+              </span>
+            )}
+            {td.ttr && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: theme.green }}>
+                <Icon name="check-circle" size={11} />TTR {td.ttr}
+              </span>
+            )}
           </div>
         </div>
 
@@ -489,10 +524,15 @@ export default function TeamHealthView({ models = [], alerts = [], teams = [], l
   const orgStats = useMemo(() => {
     if (!teamData.length) return null
     const avg = Math.round(teamData.reduce((s, t) => s + t.maturity.score, 0) / teamData.length)
+    const allTta = teamData.flatMap(t => t.ttaDeltas ?? [])
+    const allTtr = teamData.flatMap(t => t.ttrDeltas ?? [])
+    const mean = arr => arr.length ? arr.reduce((s, d) => s + d, 0) / arr.length : null
     return {
       avg,
-      improving:  teamData.filter(t => t.maturity.trend === 'improving').length,
-      atRisk:     teamData.filter(t => t.maturity.level === 'emerging').length,
+      improving: teamData.filter(t => t.maturity.trend === 'improving').length,
+      atRisk:    teamData.filter(t => t.maturity.level === 'emerging').length,
+      orgTta:    fmtMs(mean(allTta)),
+      orgTtr:    fmtMs(mean(allTtr)),
     }
   }, [teamData])
 
@@ -526,6 +566,8 @@ export default function TeamHealthView({ models = [], alerts = [], teams = [], l
           <MetricCard label="Avg Score"  value={`${orgStats.avg}/100`}  icon="trending-up"    color={theme.purple}  />
           <MetricCard label="Improving"  value={orgStats.improving}     icon="trending-up"    color={theme.green}   />
           <MetricCard label="At Risk"    value={orgStats.atRisk}        icon="alert-triangle" color={theme.red}     />
+          {orgStats.orgTta && <MetricCard label="Avg TTA" value={orgStats.orgTta} icon="clock"         color={theme.yellow} />}
+          {orgStats.orgTtr && <MetricCard label="Avg TTR" value={orgStats.orgTtr} icon="check-circle"  color={theme.green}  />}
         </div>
       )}
 

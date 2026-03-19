@@ -55,16 +55,6 @@ const TYPE_TEMPLATES = {
       { key: 'cluster_count',    label: 'Clusters',    higherBetter: null },
     ],
   },
-  llm: {
-    primaryLabel: 'Response Drift (PSI)',
-    cards: [
-      { key: 'response_length_mean',  label: 'Avg Length',       higherBetter: null },
-      { key: 'response_length_drift', label: 'Length Drift',     higherBetter: false },
-      { key: 'latency_p50',           label: 'Latency P50 (ms)', higherBetter: false },
-      { key: 'latency_p95',           label: 'Latency P95 (ms)', higherBetter: false },
-      { key: 'token_count_mean',      label: 'Avg Tokens',       higherBetter: null },
-    ],
-  },
 }
 
 /* ── Histogram shift analyser ── */
